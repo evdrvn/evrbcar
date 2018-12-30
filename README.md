@@ -1,2 +1,2 @@
 # evrbcar
-rasberry pi robot car
+raspberry pi robot car

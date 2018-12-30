@@ -1,0 +1,6 @@
+[submodule "ext/drv8830-i2c"]
+	path = ext/drv8830-i2c
+	url = https://github.com/evdrvn/drv8830-i2c
+[submodule "ext/evdsptc"]
+	path = ext/evdsptc
+	url = https://github.com/evdrvn/evdsptc

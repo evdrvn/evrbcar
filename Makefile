@@ -1,10 +1,12 @@
 COMPILER  = gcc
 CFLAGS    = -g -O2 -MMD -MP -Wall -Wextra
 EVDSPDIR  = ext/evdsptc
-LDFLAGS   = -L$(EVDSPDIR)/build -lpthread -lwiringPi
+DRVDIR    = ext/drv8830-i2c
+LDFLAGS   = -L$(EVDSPDIR)/build -lwiringPi -lpthread
 EVDSPLIB  = $(EVDSPDIR)/build/libevdsptc.a
-LIBS      = $(EVDSPLIB)
-INCLUDE   = -I./src -I$(EVDSPDIR)/src
+DRVLIB    = $(DRVDIR)/build/libdrv8830-i2c.a
+LIBS      = $(EVDSPLIB) $(DRVLIB)
+INCLUDE   = -I./src -I$(EVDSPDIR)/src -I$(DRVDIR)/src
 TARGET    = evrbcar
 SRCDIR    = ./src
 SOURCES   = $(wildcard $(SRCDIR)/*.c)
@@ -20,6 +22,11 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.c
 
 $(EVDSPLIB):
 	cd $(EVDSPDIR)/build;\
+	cmake ..;\
+	make;\
+
+$(DRVLIB):
+	cd $(DRVDIR)/build;\
 	cmake ..;\
 	make;\
 

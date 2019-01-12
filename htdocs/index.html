@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <script>
+            window.addEventListener('DOMContentLoaded', init);
+            function connect() {
+                const wsproto = 'ws:';
+                connection = new WebSocket(wsproto + '//' + window.location.host + '/websocket');
+                connection.onmessage = function (e) { 
+                };
+                connection.onerror = function (error) { alert('WebSocket error'); connection.close(); };
+            }
+            function init() {
+            }
+            function move() {
+                connection.send("move_to:" + document.getElementById('range-1').value);
+            }
+            function turn() {
+                connection.send("turn:" + document.getElementById('range-2').value);
+            }
+        </script>
+        <style type="text/css">
+            .vartical {
+                margin-top:25%;
+                -webkit-transform:rotate(-90deg);
+                -moz-transform:rotate(-90deg);
+                -o-transform:rotate(-90deg);
+                transform:rotate(-90deg);
+            }
+        </style>
+    </head>
+    <body onload="connect()">
+        <table border="0">
+            <tr>
+                <td colspan="2">
+                    <input type="button" value="move" onClick="move()"/>
+                </td>
+            </tr>
+            <tr height="180">
+                <td valign="center">
+                    <input type="range" id="range-1" class="vartical" value="0" min="0" max="10" step="1" />
+                </td>
+                <td valign="bottom">
+                    <input type="range" id="range-2" value="0" min="-5" max="5" step="1" onchange="turn()"/>
+                </td>
+            </tr>
+        </table>
+    </body>
+</html>

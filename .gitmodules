@@ -4,3 +4,6 @@
 [submodule "ext/evdsptc"]
 	path = ext/evdsptc
 	url = https://github.com/evdrvn/evdsptc
+[submodule "ext/civetweb"]
+	path = ext/civetweb
+	url = https://github.com/civetweb/civetweb

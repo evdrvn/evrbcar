@@ -2,11 +2,14 @@ COMPILER  = gcc
 CFLAGS    = -g -O2 -MMD -MP -Wall -Wextra
 EVDSPDIR  = ext/evdsptc
 DRVDIR    = ext/drv8830-i2c
-LDFLAGS   = -L$(EVDSPDIR)/build -lwiringPi -lpthread
+CVTWBDIR  = ext/civetweb
+LDFLAGS   = -L$(EVDSPDIR)/build -lwiringPi -lpthread -ldl
 EVDSPLIB  = $(EVDSPDIR)/build/libevdsptc.a
 DRVLIB    = $(DRVDIR)/build/libdrv8830-i2c.a
-LIBS      = $(EVDSPLIB) $(DRVLIB)
-INCLUDE   = -I./src -I$(EVDSPDIR)/src -I$(DRVDIR)/src
+CVTWBLIB  = $(CVTWBDIR)/libcivetweb.a
+LIBS      = $(EVDSPLIB) $(DRVLIB) $(CVTWBLIB)
+INCLUDE   = -I./src -I$(EVDSPDIR)/src -I$(DRVDIR)/src -I$(CVTWBDIR)/include
+
 TARGET    = evrbcar
 SRCDIR    = ./src
 SOURCES   = $(wildcard $(SRCDIR)/*.c)
@@ -29,6 +32,10 @@ $(DRVLIB):
 	cd $(DRVDIR)/build;\
 	cmake ..;\
 	make;\
+
+$(CVTWBLIB):
+	cd $(CVTWBDIR);\
+	make lib lib WITH_WEBSOCKET=1;\
 
 all: clean $(TARGET)
 

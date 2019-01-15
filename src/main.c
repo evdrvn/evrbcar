@@ -1,6 +1,7 @@
 #include <limits.h>
 #include <string.h>
 #include <signal.h>
+#include <math.h>
 #include <wiringPi.h>
 #include <evdsptc.h>
 #include <drv8830-i2c.h>
@@ -16,6 +17,7 @@
 #define DECEL_VOLTAGE (1.80F)
 #define STOP_START (DISTANCE_PER_COUNT * 2.0F)
 #define DECEL_START (STOP_START * 3.0F)
+#define TURN_RESOLUTION (5.0F)
 #define MOTOR_NUM (2)
 #define I2C_DEVNAME "/dev/i2c-1"
 #define MAX_WS_CLIENTS (2)
@@ -81,11 +83,17 @@ static void move_forward_to(t_periodic_context* prdctx, float distance){
     pthread_mutex_unlock(&prdctx->mutex);
 }
 
-static void turn(t_periodic_context* prdctx, float voltage_offset){
+static void turn_at(t_periodic_context* prdctx, float voltage_offset){
+    bool target = 0; 
     pthread_mutex_lock(&prdctx->mutex);
-    prdctx->posctx[0].voltage_offset = voltage_offset / -2.0F; 
-    prdctx->posctx[1].voltage_offset = voltage_offset /  2.0F; 
+    if(voltage_offset < 0.0F) target = 1;
+    else target = 0;
+    prdctx->posctx[target].voltage_offset = fabs(voltage_offset) * -1.0F; 
+    prdctx->posctx[!target].voltage_offset = 0.0F; 
     pthread_mutex_unlock(&prdctx->mutex);
+    printf(" -> voltage_offset = {%f, %f}", 
+            prdctx->posctx[0].voltage_offset, 
+            prdctx->posctx[1].voltage_offset); 
 }
 
 static bool periodic_routine(evdsptc_event_t* event){
@@ -134,6 +142,7 @@ static bool periodic_routine(evdsptc_event_t* event){
         }
 
         v = (prdctx->posctx[i].voltage + prdctx->posctx[i].voltage_offset);
+        if(fabs(v) < DECEL_VOLTAGE) v = 0.0F;
         v *= DIRECTION_CORRECTION[i];
         drv8830_move(&prdctx->posctx[i].conn, v);
 
@@ -223,21 +232,21 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
 
     if(len >= BUFSIZ) len = BUFSIZ - 1;
     memcpy(buf, data, len);
-    buf[len] = '\0';
+    buf[len] = 0;
     printf("%s", buf);
+    fflush(stdout);
     
     cmd = strtok_r(buf, ":", &c);
     val = strtok_r(NULL, ",", &c);
     v = atof(val);
 
     if(0 == strncmp("move_to", cmd, 6)) {
-        printf(" -> val = %f\n", v);
         move_forward_to(&prdctx, v * STOP_START * 3.0F * 2.0F);
     }
     else if(0 == strncmp("turn", cmd, 4)) {
-        printf(" -> val = %f\n", v);
-        turn(&prdctx, v * 0.6F);
-    }else printf("\n");
+        turn_at(&prdctx, v * (DRIVE_VOLTAGE - DECEL_VOLTAGE) / (TURN_RESOLUTION - 1.0F));
+    }
+    printf("\n");
     return 1;
 }
 
@@ -271,7 +280,7 @@ int main(void){
     const char *options[] = { 
         "document_root", "./htdocs",
         "request_timeout_ms", "10000",
-        "websocket_timeout_ms", "30000"
+        "websocket_timeout_ms", "86400000"
     };
     
     mg_init_library(0);

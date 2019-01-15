@@ -126,8 +126,8 @@ static bool periodic_routine(evdsptc_event_t* event){
             prdctx->posctx[i].voltage = 0.0F;
         }
 
-        if(prdctx->state > STATE_STOP) v = (prdctx->posctx[i].voltage + prdctx->posctx[i].voltage_offset) * DIRECTION_CORRECTION[i];
-        else v = prdctx->posctx[i].voltage;
+        v = (prdctx->posctx[i].voltage + prdctx->posctx[i].voltage_offset);
+        v *= DIRECTION_CORRECTION[i];
         drv8830_move(&prdctx->posctx[i].conn, v);
 
         prdctx->posctx[i].log[prdctx->posctx[i].period % LOG_SIZE].voltage = prdctx->posctx[i].voltage;

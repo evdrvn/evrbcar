@@ -76,12 +76,16 @@ static long long int timespec_diff(struct timespec *t1, struct timespec *t2){
 }
 
 static void move_forward_to(t_periodic_context* prdctx, float distance){
+    pthread_mutex_lock(&prdctx->mutex);
     prdctx->move_remaining += distance * 2.0F; 
+    pthread_mutex_unlock(&prdctx->mutex);
 }
 
 static void turn(t_periodic_context* prdctx, float voltage_offset){
+    pthread_mutex_lock(&prdctx->mutex);
     prdctx->posctx[0].voltage_offset = voltage_offset / -2.0F; 
     prdctx->posctx[1].voltage_offset = voltage_offset /  2.0F; 
+    pthread_mutex_unlock(&prdctx->mutex);
 }
 
 static bool periodic_routine(evdsptc_event_t* event){
@@ -97,6 +101,9 @@ static bool periodic_routine(evdsptc_event_t* event){
     prdctx->prev = now;
     if(interval < prdctx->min) prdctx->min = interval;
     if(interval > prdctx->max) prdctx->max = interval;
+    
+    pthread_mutex_lock(&prdctx->mutex);
+    
     for(i = 0; i < 2; i++){
         input = digitalRead(prdctx->posctx[i].pin);
         if(prdctx->posctx[i].last_input != input){
@@ -136,12 +143,15 @@ static bool periodic_routine(evdsptc_event_t* event){
 
         prdctx->posctx[i].period++;
     }
+    
+    pthread_mutex_unlock(&prdctx->mutex);
+    
     return (bool)finalize;
 }
 
 static void createresponse(char* buf, unsigned int size){
-    pthread_mutex_lock(&prdctx.mutex);
-    pthread_mutex_unlock(&prdctx.mutex);
+    (void)buf;
+    (void)size;
     return;
 }
 
@@ -149,6 +159,7 @@ static int handler(struct mg_connection *conn, void *ignored)
 {
     char msg[BUFSIZ];
     unsigned long len;
+    (void)ignored;
 
     createresponse(msg, BUFSIZ);
 
@@ -170,7 +181,7 @@ static int WebSocketConnectHandler(const struct mg_connection *conn, void *cbdat
     struct mg_context *ctx = mg_get_context(conn);
     int reject = 1;
     int i;
-
+    (void)cbdata;
     mg_lock_context(ctx);
     for (i = 0; i < MAX_WS_CLIENTS; i++) {
         if (ws_clients[i].conn == NULL) {
@@ -191,6 +202,7 @@ static void WebSocketReadyHandler(struct mg_connection *conn, void *cbdata)
     char msg[BUFSIZ];
     createresponse(msg, BUFSIZ);
     t_ws_client *client = mg_get_user_connection_data(conn);
+    (void)cbdata;
 
     mg_websocket_write(conn, WEBSOCKET_OPCODE_TEXT, msg, strlen(msg));
 
@@ -205,6 +217,9 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
     char *c;
     char *val;
     float v;
+    (void)conn;
+    (void)bits;
+    (void)cbdata;
 
     if(len >= BUFSIZ) len = BUFSIZ - 1;
     memcpy(buf, data, len);
@@ -231,6 +246,7 @@ static void WebSocketCloseHandler(const struct mg_connection *conn, void *cbdata
 {
     struct mg_context *ctx = mg_get_context(conn);
     t_ws_client *client = mg_get_user_connection_data(conn);
+    (void)cbdata;
 
     mg_lock_context(ctx);
     client->state = 0;
@@ -239,6 +255,7 @@ static void WebSocketCloseHandler(const struct mg_connection *conn, void *cbdata
 }
 
 void signal_handler(int signum) {
+    (void)signum;
     finalize = 1;
 }
 
@@ -310,8 +327,8 @@ int main(void){
     evdsptc_event_waitdone(&ev);
     evdsptc_destroy(&ctx, true);
 
-    for(j = 0; i < MOTOR_NUM; j++){
-        drv8830_move(&prdctx.posctx[i].conn, 0.0F);
+    for(j = 0; j < MOTOR_NUM; j++){
+        drv8830_move(&prdctx.posctx[j].conn, 0.0F);
         for(i = 0; i < LOG_SIZE; i++){
             printf("%f, %f, %f\n",
                 prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].voltage,

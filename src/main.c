@@ -24,7 +24,8 @@
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
-static int GPIO_PIN[MOTOR_NUM] = {23, 24};
+static int ROTENCDR_GPIO_PIN[MOTOR_NUM] = {23, 24};
+static int LINESENS_GPIO_PIN[3] = {17, 27, 22};
 
 typedef enum drive_status{
     STATE_COAST = 0,
@@ -40,7 +41,7 @@ typedef struct posctrl_log {
 } t_posctrl_log;
 
 typedef struct posctrl_context {
-    int pin;
+    int rot_encoder_gpio;
     int last_input;
     unsigned int period;
     int count;
@@ -62,6 +63,8 @@ typedef struct periodic_context {
     int coin_count;
     t_posctrl_context posctx[2];
     pthread_mutex_t mutex;
+    unsigned char line_sens;
+    unsigned char last_line_sens;
 } t_periodic_context;
 
 typedef struct ws_client {
@@ -72,6 +75,15 @@ typedef struct ws_client {
 static struct periodic_context prdctx;
 static t_ws_client ws_clients[MAX_WS_CLIENTS];
 static volatile sig_atomic_t finalize = 0;
+
+static void printb(unsigned char v, unsigned int width) {
+    unsigned int mask = (int)1 << (width - 1);
+    do{
+        putchar(!(mask & v) ? '1' : '0');
+        mask = mask >> 1;
+    }
+    while (--width > 0);
+}
 
 static long long int timespec_diff(struct timespec *t1, struct timespec *t2){
     return  t2->tv_nsec - t1->tv_nsec + (t2->tv_sec - t1->tv_sec) * NS_AS_SEC;
@@ -112,8 +124,16 @@ static bool periodic_routine(evdsptc_event_t* event){
     
     pthread_mutex_lock(&prdctx->mutex);
     
+    input = 0; 
+    for(i = 0; i < 3; i++){
+        input = input << 1;
+        input = input | digitalRead(LINESENS_GPIO_PIN[i]);
+    }
+    prdctx->last_line_sens = prdctx->line_sens;
+    prdctx->line_sens = input;
+ 
     for(i = 0; i < 2; i++){
-        input = digitalRead(prdctx->posctx[i].pin);
+        input = digitalRead(prdctx->posctx[i].rot_encoder_gpio);
         if(prdctx->posctx[i].last_input != input){
             prdctx->posctx[i].last_input = input; 
             prdctx->posctx[i].count++;
@@ -134,7 +154,6 @@ static bool periodic_routine(evdsptc_event_t* event){
     if(prdctx->state == STATE_STOP && prdctx->coin_count-- <= 0) prdctx->state = STATE_COAST;
     
     for(i = 0; i < 2; i++){
-
         if(prdctx->state == STATE_DRIVE) prdctx->posctx[i].voltage = DRIVE_VOLTAGE;
         else if(prdctx->state == STATE_DECEL) prdctx->posctx[i].voltage = DECEL_VOLTAGE;
         else if(prdctx->state == STATE_STOP){
@@ -154,7 +173,13 @@ static bool periodic_routine(evdsptc_event_t* event){
     }
     
     pthread_mutex_unlock(&prdctx->mutex);
-    
+   
+    if(prdctx->last_line_sens != prdctx->line_sens){
+        printf("line_sens changed to : ");
+        printb(prdctx->line_sens, 3);
+        printf("\n");
+    }
+
     return (bool)finalize;
 }
 
@@ -294,13 +319,19 @@ int main(void){
     prdctx.initial = true;
     prdctx.max = TICK_NS;
     prdctx.min = TICK_NS;
+    prdctx.line_sens = 0;
     pthread_mutex_init(&prdctx.mutex, &mutexattr);
+
+    for(i = 0; i < 3; i++){
+        pinMode(LINESENS_GPIO_PIN[i], INPUT); 
+    }
+
     for(i = 0; i < 2; i++){
         prdctx.posctx[i].period = 0;
         prdctx.posctx[i].count = 0;
-        prdctx.posctx[i].pin = GPIO_PIN[i];
-        pinMode(prdctx.posctx[i].pin, INPUT); 
-        prdctx.posctx[i].last_input = digitalRead(prdctx.posctx[i].pin);
+        prdctx.posctx[i].rot_encoder_gpio = ROTENCDR_GPIO_PIN[i];
+        pinMode(prdctx.posctx[i].rot_encoder_gpio, INPUT); 
+        prdctx.posctx[i].last_input = digitalRead(prdctx.posctx[i].rot_encoder_gpio);
         prdctx.posctx[i].voltage = 0.0F;
         prdctx.posctx[i].voltage_offset = 0.0F;
         prdctx.posctx[i].position = 0.0F;

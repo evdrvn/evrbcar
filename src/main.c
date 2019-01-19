@@ -28,10 +28,13 @@ static int ROTENCDR_GPIO_PIN[MOTOR_NUM] = {23, 24};
 static int LINESENS_GPIO_PIN[3] = {17, 27, 22};
 
 typedef enum drive_status{
-    STATE_COAST = 0,
-    STATE_DRIVE,
-    STATE_DECEL,
-    STATE_STOP,
+    STATE_REMOTE_IDLE = 0,
+    STATE_REMOTE_DRIVE,
+    STATE_REMOTE_DECEL,
+    STATE_REMOTE_STOP,
+    STATE_LINE_IDLE,
+    STATE_LINE_DRIVE,
+    STATE_LINE_STOP,
 } t_drive_status;
 
 typedef struct posctrl_log {
@@ -64,7 +67,9 @@ typedef struct periodic_context {
     t_posctrl_context posctx[2];
     pthread_mutex_t mutex;
     unsigned char line_sens;
+    int line_sens_continuous_cnt;
     unsigned char last_line_sens;
+    int last_line_sens_continuous_cnt;
 } t_periodic_context;
 
 typedef struct ws_client {
@@ -95,7 +100,7 @@ static void move_forward_to(t_periodic_context* prdctx, float distance){
     pthread_mutex_unlock(&prdctx->mutex);
 }
 
-static void turn_at(t_periodic_context* prdctx, float voltage_offset){
+static void turn_at_offset(t_periodic_context* prdctx, float voltage_offset){
     bool target = 0; 
     pthread_mutex_lock(&prdctx->mutex);
     if(voltage_offset < 0.0F) target = 1;
@@ -106,6 +111,10 @@ static void turn_at(t_periodic_context* prdctx, float voltage_offset){
     printf(" -> voltage_offset = {%f, %f}", 
             prdctx->posctx[0].voltage_offset, 
             prdctx->posctx[1].voltage_offset); 
+}
+
+static float curve_to_offset(float level){
+    return level * (DRIVE_VOLTAGE - DECEL_VOLTAGE) / (TURN_RESOLUTION - 1.0F);
 }
 
 static bool periodic_routine(evdsptc_event_t* event){
@@ -145,20 +154,43 @@ static bool periodic_routine(evdsptc_event_t* event){
             (PERIODS_SPEED_AVERAGE * TICK_SEC);
     }   
     
-    if(prdctx->move_remaining > STOP_START * 2.0F) prdctx->state = STATE_DRIVE;
-    if(prdctx->state > STATE_COAST && prdctx->state < STATE_DECEL && prdctx->move_remaining < DECEL_START * 2.0F) prdctx->state = STATE_DECEL;
-    if(prdctx->state > STATE_COAST && prdctx->state < STATE_STOP && prdctx->move_remaining < STOP_START * 2.0F){
-        prdctx->state = STATE_STOP;
-        prdctx->coin_count = 5;
-    }
-    if(prdctx->state == STATE_STOP && prdctx->coin_count-- <= 0) prdctx->state = STATE_COAST;
-    
-    for(i = 0; i < 2; i++){
-        if(prdctx->state == STATE_DRIVE) prdctx->posctx[i].voltage = DRIVE_VOLTAGE;
-        else if(prdctx->state == STATE_DECEL) prdctx->posctx[i].voltage = DECEL_VOLTAGE;
-        else if(prdctx->state == STATE_STOP){
-            prdctx->posctx[i].voltage = 0.0F;
+    if(prdctx->state < STATE_LINE_IDLE){
+        if(prdctx->move_remaining > STOP_START * 2.0F) prdctx->state = STATE_REMOTE_DRIVE;
+        if(prdctx->state > STATE_REMOTE_IDLE && prdctx->state < STATE_REMOTE_DECEL && prdctx->move_remaining < DECEL_START * 2.0F) prdctx->state = STATE_REMOTE_DECEL;
+        if(prdctx->state > STATE_REMOTE_IDLE && prdctx->state < STATE_REMOTE_STOP && prdctx->move_remaining < STOP_START * 2.0F){
+            prdctx->state = STATE_REMOTE_STOP;
+            prdctx->coin_count = 5;
         }
+        if(prdctx->state == STATE_REMOTE_STOP && prdctx->coin_count-- <= 0) prdctx->state = STATE_REMOTE_IDLE;
+    }else{
+        if(prdctx->line_sens == 0) prdctx->state = STATE_LINE_IDLE;
+        else if(prdctx->line_sens == 1) turn_at_offset(prdctx, curve_to_offset(4.0F));
+        else if(prdctx->line_sens == 3){
+            if(prdctx->last_line_sens == 1) turn_at_offset(prdctx, curve_to_offset(-2.0F));
+            else turn_at_offset(prdctx, curve_to_offset(1.0F));
+        }
+        else if(prdctx->line_sens == 4) turn_at_offset(prdctx, curve_to_offset(-4.0F));
+        else if(prdctx->line_sens == 6){
+            if(prdctx->last_line_sens == 4) turn_at_offset(prdctx, curve_to_offset(2.0F));
+            else turn_at_offset(prdctx, curve_to_offset(-1.0F));
+        }
+        else{
+            if(prdctx->last_line_sens_continuous_cnt > 0){
+                prdctx->last_line_sens_continuous_cnt -= 2;
+                if(prdctx->last_line_sens == 3) turn_at_offset(prdctx, curve_to_offset(-1.0F));
+                else if(prdctx->last_line_sens == 6) turn_at_offset(prdctx, curve_to_offset(1.0F));
+                else turn_at_offset(prdctx, curve_to_offset(0.0F));
+            }
+            else turn_at_offset(prdctx, curve_to_offset(0.0F));
+        }
+    }
+
+    for(i = 0; i < 2; i++){
+        if(prdctx->state == STATE_REMOTE_DRIVE) prdctx->posctx[i].voltage = DRIVE_VOLTAGE;
+        else if(prdctx->state == STATE_REMOTE_DECEL) prdctx->posctx[i].voltage = DECEL_VOLTAGE;
+        else if(prdctx->state == STATE_REMOTE_STOP) prdctx->posctx[i].voltage = 0.0F;
+        else if(prdctx->state == STATE_LINE_STOP) prdctx->posctx[i].voltage = 0.0F;
+        else if(prdctx->state == STATE_LINE_DRIVE) prdctx->posctx[i].voltage = DRIVE_VOLTAGE;
 
         v = (prdctx->posctx[i].voltage + prdctx->posctx[i].voltage_offset);
         if(fabs(v) < DECEL_VOLTAGE) v = 0.0F;
@@ -171,6 +203,12 @@ static bool periodic_routine(evdsptc_event_t* event){
 
         prdctx->posctx[i].period++;
     }
+
+    if(prdctx->last_line_sens != prdctx->line_sens){
+        prdctx->last_line_sens_continuous_cnt = prdctx->line_sens_continuous_cnt;
+        prdctx->line_sens_continuous_cnt = 0;
+    }
+    prdctx->line_sens_continuous_cnt++;
     
     pthread_mutex_unlock(&prdctx->mutex);
    
@@ -243,7 +281,6 @@ static void WebSocketReadyHandler(struct mg_connection *conn, void *cbdata)
     client->state = 2;
 }
 
-
 static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data, size_t len, void *cbdata)
 {
     char buf[BUFSIZ]; 
@@ -269,7 +306,7 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
         move_forward_to(&prdctx, v * STOP_START * 3.0F * 2.0F);
     }
     else if(0 == strncmp("turn", cmd, 4)) {
-        turn_at(&prdctx, v * (DRIVE_VOLTAGE - DECEL_VOLTAGE) / (TURN_RESOLUTION - 1.0F));
+        turn_at_offset(&prdctx, curve_to_offset(v));
     }
     printf("\n");
     return 1;
@@ -293,7 +330,7 @@ void signal_handler(int signum) {
     finalize = 1;
 }
 
-int main(void){
+int main(int argc, char *argv[]){
     struct timespec interval = { interval.tv_sec = 0, interval.tv_nsec = TICK_NS};
     pthread_t th;
     pthread_mutexattr_t mutexattr;
@@ -310,16 +347,19 @@ int main(void){
     
     mg_init_library(0);
     mgctx = mg_start(NULL, 0, options);
-
+    
     if(wiringPiSetupGpio() == -1) return 1; 
-
+    
     pthread_mutexattr_init(&mutexattr);
     pthread_mutexattr_setprotocol(&mutexattr, PTHREAD_PRIO_INHERIT);
+
+    if(argc > 2 && strncmp("line", argv[1], 4)) prdctx.state = STATE_LINE_DRIVE;
 
     prdctx.initial = true;
     prdctx.max = TICK_NS;
     prdctx.min = TICK_NS;
-    prdctx.line_sens = 0;
+    prdctx.line_sens = 7;
+    prdctx.last_line_sens = 7;
     pthread_mutex_init(&prdctx.mutex, &mutexattr);
 
     for(i = 0; i < 3; i++){

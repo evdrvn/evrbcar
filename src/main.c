@@ -52,6 +52,7 @@ typedef struct posctrl_context {
     float speed; 
     float voltage;
     float voltage_offset;
+    float last_voltage_offset;
     t_posctrl_log log[LOG_SIZE];
     drv8830_conn_t conn;
 } t_posctrl_context;
@@ -84,7 +85,7 @@ static volatile sig_atomic_t finalize = 0;
 static void printb(unsigned char v, unsigned int width) {
     unsigned int mask = (int)1 << (width - 1);
     do{
-        putchar(!(mask & v) ? '1' : '0');
+        putchar((mask & v) ? '1' : '0');
         mask = mask >> 1;
     }
     while (--width > 0);
@@ -95,22 +96,21 @@ static long long int timespec_diff(struct timespec *t1, struct timespec *t2){
 }
 
 static void move_forward_to(t_periodic_context* prdctx, float distance){
-    pthread_mutex_lock(&prdctx->mutex);
     prdctx->move_remaining += distance * 2.0F; 
-    pthread_mutex_unlock(&prdctx->mutex);
 }
 
 static void turn_at_offset(t_periodic_context* prdctx, float voltage_offset){
     bool target = 0; 
-    pthread_mutex_lock(&prdctx->mutex);
     if(voltage_offset < 0.0F) target = 1;
     else target = 0;
+    prdctx->posctx[target].last_voltage_offset = prdctx->posctx[target].voltage_offset; 
     prdctx->posctx[target].voltage_offset = fabs(voltage_offset) * -1.0F; 
     prdctx->posctx[!target].voltage_offset = 0.0F; 
-    pthread_mutex_unlock(&prdctx->mutex);
-    printf(" -> voltage_offset = {%f, %f}", 
-            prdctx->posctx[0].voltage_offset, 
-            prdctx->posctx[1].voltage_offset); 
+    if(prdctx->posctx[target].last_voltage_offset != prdctx->posctx[target].voltage_offset){ 
+        printf(" -> voltage_offset = {%f, %f}\n", 
+                prdctx->posctx[0].voltage_offset, 
+                prdctx->posctx[1].voltage_offset); 
+    }
 }
 
 static float curve_to_offset(float level){
@@ -136,7 +136,7 @@ static bool periodic_routine(evdsptc_event_t* event){
     input = 0; 
     for(i = 0; i < 3; i++){
         input = input << 1;
-        input = input | digitalRead(LINESENS_GPIO_PIN[i]);
+        input = input | (1 & (!digitalRead(LINESENS_GPIO_PIN[i])));
     }
     prdctx->last_line_sens = prdctx->line_sens;
     prdctx->line_sens = input;
@@ -163,16 +163,28 @@ static bool periodic_routine(evdsptc_event_t* event){
         }
         if(prdctx->state == STATE_REMOTE_STOP && prdctx->coin_count-- <= 0) prdctx->state = STATE_REMOTE_IDLE;
     }else{
-        if(prdctx->line_sens == 0) prdctx->state = STATE_LINE_IDLE;
+        if(prdctx->last_line_sens != prdctx->line_sens){
+            prdctx->last_line_sens_continuous_cnt = prdctx->line_sens_continuous_cnt;
+            prdctx->line_sens_continuous_cnt = 0;
+            printf("line_sens changed to :%d = ", prdctx->line_sens);
+            printb(prdctx->line_sens, 3);
+            printf("\n");
+        }
+
+        if(prdctx->line_sens == 0){
+            if(prdctx->line_sens_continuous_cnt > 60) prdctx->state = STATE_LINE_STOP;
+            else if(prdctx->last_line_sens == 4) turn_at_offset(prdctx, curve_to_offset(-5.0F));
+            else if(prdctx->last_line_sens == 1) turn_at_offset(prdctx, curve_to_offset(5.0F));
+        }
         else if(prdctx->line_sens == 1) turn_at_offset(prdctx, curve_to_offset(4.0F));
         else if(prdctx->line_sens == 3){
             if(prdctx->last_line_sens == 1) turn_at_offset(prdctx, curve_to_offset(-2.0F));
-            else turn_at_offset(prdctx, curve_to_offset(1.0F));
+            else turn_at_offset(prdctx, curve_to_offset(-1.0F));
         }
         else if(prdctx->line_sens == 4) turn_at_offset(prdctx, curve_to_offset(-4.0F));
         else if(prdctx->line_sens == 6){
             if(prdctx->last_line_sens == 4) turn_at_offset(prdctx, curve_to_offset(2.0F));
-            else turn_at_offset(prdctx, curve_to_offset(-1.0F));
+            else turn_at_offset(prdctx, curve_to_offset(1.0F));
         }
         else{
             if(prdctx->last_line_sens_continuous_cnt > 0){
@@ -183,6 +195,7 @@ static bool periodic_routine(evdsptc_event_t* event){
             }
             else turn_at_offset(prdctx, curve_to_offset(0.0F));
         }
+        prdctx->line_sens_continuous_cnt++;
     }
 
     for(i = 0; i < 2; i++){
@@ -203,21 +216,9 @@ static bool periodic_routine(evdsptc_event_t* event){
 
         prdctx->posctx[i].period++;
     }
-
-    if(prdctx->last_line_sens != prdctx->line_sens){
-        prdctx->last_line_sens_continuous_cnt = prdctx->line_sens_continuous_cnt;
-        prdctx->line_sens_continuous_cnt = 0;
-    }
-    prdctx->line_sens_continuous_cnt++;
     
     pthread_mutex_unlock(&prdctx->mutex);
    
-    if(prdctx->last_line_sens != prdctx->line_sens){
-        printf("line_sens changed to : ");
-        printb(prdctx->line_sens, 3);
-        printf("\n");
-    }
-
     return (bool)finalize;
 }
 
@@ -295,7 +296,7 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
     if(len >= BUFSIZ) len = BUFSIZ - 1;
     memcpy(buf, data, len);
     buf[len] = 0;
-    printf("%s", buf);
+    printf("%s\n", buf);
     fflush(stdout);
     
     cmd = strtok_r(buf, ":", &c);
@@ -308,7 +309,6 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
     else if(0 == strncmp("turn", cmd, 4)) {
         turn_at_offset(&prdctx, curve_to_offset(v));
     }
-    printf("\n");
     return 1;
 }
 
@@ -353,7 +353,10 @@ int main(int argc, char *argv[]){
     pthread_mutexattr_init(&mutexattr);
     pthread_mutexattr_setprotocol(&mutexattr, PTHREAD_PRIO_INHERIT);
 
-    if(argc > 2 && strncmp("line", argv[1], 4)) prdctx.state = STATE_LINE_DRIVE;
+    if(argc > 1 && 0 == strncmp("line", argv[1], 4)){
+        printf("line tracing mode\n");
+        prdctx.state = STATE_LINE_DRIVE;
+    }
 
     prdctx.initial = true;
     prdctx.max = TICK_NS;
@@ -409,12 +412,12 @@ int main(int argc, char *argv[]){
 
     for(j = 0; j < MOTOR_NUM; j++){
         drv8830_move(&prdctx.posctx[j].conn, 0.0F);
-        for(i = 0; i < LOG_SIZE; i++){
-            printf("%f, %f, %f\n",
-                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].voltage,
-                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].position,
-                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].speed);
-        }
+//        for(i = 0; i < LOG_SIZE; i++){
+//            printf("%f, %f, %f\n",
+//                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].voltage,
+//                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].position,
+//                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].speed);
+//        }
     }
 
     return 0;

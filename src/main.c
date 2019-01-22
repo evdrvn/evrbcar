@@ -21,11 +21,14 @@
 #define MOTOR_NUM (2)
 #define I2C_DEVNAME "/dev/i2c-1"
 #define MAX_WS_CLIENTS (2)
+#define RING_BUFFER_SIZE (32)
+#define EVENT_LOG_LENGTH (64)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
 static int ROTENCDR_GPIO_PIN[MOTOR_NUM] = {23, 24};
 static int LINESENS_GPIO_PIN[3] = {17, 27, 22};
+static char EVENT_LOG_BUFFER[RING_BUFFER_SIZE][64];
 
 typedef enum drive_status{
     STATE_REMOTE_IDLE = 0,
@@ -166,13 +169,14 @@ static bool periodic_routine(evdsptc_event_t* event){
         if(prdctx->last_line_sens != prdctx->line_sens){
             prdctx->last_line_sens_continuous_cnt = prdctx->line_sens_continuous_cnt;
             prdctx->line_sens_continuous_cnt = 0;
+            if(prdctx->state == STATE_LINE_IDLE) prdctx->state = STATE_LINE_DRIVE;
             printf("line_sens changed to :%d = ", prdctx->line_sens);
             printb(prdctx->line_sens, 3);
             printf("\n");
         }
 
         if(prdctx->line_sens == 0){
-            if(prdctx->line_sens_continuous_cnt > 60) prdctx->state = STATE_LINE_STOP;
+            if(prdctx->line_sens_continuous_cnt > 30) prdctx->state = STATE_LINE_IDLE;
             else if(prdctx->last_line_sens == 4) turn_at_offset(prdctx, curve_to_offset(-5.0F));
             else if(prdctx->last_line_sens == 1) turn_at_offset(prdctx, curve_to_offset(5.0F));
         }
@@ -202,8 +206,9 @@ static bool periodic_routine(evdsptc_event_t* event){
         if(prdctx->state == STATE_REMOTE_DRIVE) prdctx->posctx[i].voltage = DRIVE_VOLTAGE;
         else if(prdctx->state == STATE_REMOTE_DECEL) prdctx->posctx[i].voltage = DECEL_VOLTAGE;
         else if(prdctx->state == STATE_REMOTE_STOP) prdctx->posctx[i].voltage = 0.0F;
-        else if(prdctx->state == STATE_LINE_STOP) prdctx->posctx[i].voltage = 0.0F;
+        else if(prdctx->state == STATE_LINE_IDLE) prdctx->posctx[i].voltage = 0.0F;
         else if(prdctx->state == STATE_LINE_DRIVE) prdctx->posctx[i].voltage = DRIVE_VOLTAGE;
+        else if(prdctx->state == STATE_LINE_STOP) prdctx->posctx[i].voltage = 0.0F;
 
         v = (prdctx->posctx[i].voltage + prdctx->posctx[i].voltage_offset);
         if(fabs(v) < DECEL_VOLTAGE) v = 0.0F;
@@ -339,10 +344,12 @@ int main(int argc, char *argv[]){
     evdsptc_event_t ev;
     int i,j;
     struct mg_context *mgctx;
+    bool dump = false;
+
     const char *options[] = { 
         "document_root", "./htdocs",
         "request_timeout_ms", "10000",
-        "websocket_timeout_ms", "86400000"
+        "websocket_timeout_ms", "900000"
     };
     
     mg_init_library(0);
@@ -353,9 +360,14 @@ int main(int argc, char *argv[]){
     pthread_mutexattr_init(&mutexattr);
     pthread_mutexattr_setprotocol(&mutexattr, PTHREAD_PRIO_INHERIT);
 
-    if(argc > 1 && 0 == strncmp("line", argv[1], 4)){
-        printf("line tracing mode\n");
-        prdctx.state = STATE_LINE_DRIVE;
+    if(argc > 1 && 0 == index(argv[1], '-')){
+        if(NULL != index(argv[1], 'l')){
+            printf("line tracing mode\n");
+            prdctx.state = STATE_LINE_DRIVE;
+        }
+        if(NULL != index(argv[1], 'd')){
+            dump = true; 
+        }
     }
 
     prdctx.initial = true;
@@ -412,12 +424,14 @@ int main(int argc, char *argv[]){
 
     for(j = 0; j < MOTOR_NUM; j++){
         drv8830_move(&prdctx.posctx[j].conn, 0.0F);
-//        for(i = 0; i < LOG_SIZE; i++){
-//            printf("%f, %f, %f\n",
-//                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].voltage,
-//                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].position,
-//                prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].speed);
-//        }
+        if(dump){
+            for(i = 0; i < LOG_SIZE; i++){
+                printf("%f, %f, %f\n",
+                        prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].voltage,
+                        prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].position,
+                        prdctx.posctx[j].log[(prdctx.posctx[j].period + i) % LOG_SIZE].speed);
+            }
+        }
     }
 
     return 0;

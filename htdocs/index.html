@@ -13,11 +13,15 @@
             }
             function init() {
             }
-            function move() {
-                connection.send("move_to:" + document.getElementById('range-1').value);
-            }
             function turn() {
                 connection.send("turn:" + document.getElementById('range-2').value);
+            }
+            function move() {
+                connection.send(document.getElementById('ctrlform').mode.value + ':' + document.getElementById('range-1').value);
+                turn(); 
+            }
+            function range() {
+                if(document.getElementById('ctrlform').mode.value != 'move_to') move();
             }
         </script>
         <style type="text/css">
@@ -31,20 +35,27 @@
         </style>
     </head>
     <body onload="connect()">
+        <form id="ctrlform">
         <table border="0">
             <tr>
+                <td colspan="2">
+                    <input type="radio" name="mode" value="move_to" checked="checked"/>Move to
+                    <input type="radio" name="mode" value="move_at"/>Move at
+                    <input type="radio" name="mode" value="line_trace"/>Line Tracing
+                </td>
                 <td colspan="2">
                     <input type="button" value="move" onClick="move()"/>
                 </td>
             </tr>
             <tr height="180">
                 <td valign="center">
-                    <input type="range" id="range-1" class="vartical" value="0" min="0" max="10" step="1" />
+                    <input type="range" id="range-1" class="vartical" value="0" min="0" max="5" step="1" onChange="range()"/>
                 </td>
                 <td valign="bottom">
-                    <input type="range" id="range-2" value="0" min="-5" max="5" step="1" onchange="turn()"/>
+                    <input type="range" id="range-2" value="0" min="-5" max="5" step="1" onChange="turn()"/>
                 </td>
             </tr>
         </table>
+        </form> 
     </body>
 </html>

@@ -15,7 +15,7 @@
 #define DISTANCE_PER_COUNT (215.0F / 40.0F) // mm
 #define LOG_SIZE (1024)
 #define PERIODS_SPEED_AVERAGE (16)
-#define DRIVE_VOLTAGE_MAX (4.20F)
+#define DRIVE_VOLTAGE_MAX (4.50F)
 #define DECEL_VOLTAGE (1.80F)
 #define STOP_START (DISTANCE_PER_COUNT * 2.0F)
 #define PERIODS_STOPPING (5)
@@ -24,14 +24,14 @@
 #define MOTOR_NUM (2)
 #define LINESENS_NUM (3)
 #define I2C_DEVNAME "/dev/i2c-1"
-#define MAX_WS_CLIENTS (2)
+#define MAX_WS_CLIENTS (1)
 #define RING_BUFFER_SIZE (32)
 #define EVENT_LOG_LENGTH (64)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
 static int ROTENCDR_GPIO_PIN[MOTOR_NUM] = {23, 24};
-static int LINESENS_GPIO_PIN[3] = {17, 27, 22};
+static int LINESENS_GPIO_PIN[3] = {22, 27, 17};
 static char EVENT_LOG_BUFFER[RING_BUFFER_SIZE][64];
 static unsigned int event_log_index = 0;
 static pthread_mutex_t elogmtx;
@@ -48,6 +48,7 @@ typedef enum drive_status{
 } t_drive_status;
 
 typedef struct posctrl_log {
+    t_drive_status state;
     float voltage;
     int count;
     float speed;
@@ -130,21 +131,12 @@ static void move_forward_to(t_periodic_context* prdctx, float distance){
 
 static void turn_at_offset(t_periodic_context* prdctx, float voltage_offset){
     bool target = 0; 
-    int i = 0;
 
-    if(prdctx->state != STATE_REMOTE_IDLE){
-        if(voltage_offset < 0.0F) target = 1;
-        else target = 0;
-        prdctx->posctx[target].last_voltage_offset = prdctx->posctx[target].voltage_offset; 
-        prdctx->posctx[target].voltage_offset = fabs(voltage_offset) * -1.0F; 
-        prdctx->posctx[!target].voltage_offset = 0.0F; 
-    }
-    else{
-        for(i = 0; i < MOTOR_NUM; i++){
-            prdctx->posctx[i].last_voltage_offset = prdctx->posctx[i].voltage_offset; 
-            prdctx->posctx[i].voltage_offset = voltage_offset / 2.0F * pow(-1.0F, (1.0F + i * 1.0F)); 
-        }
-    }
+    if(voltage_offset < 0.0F) target = 1;
+    else target = 0;
+    prdctx->posctx[target].last_voltage_offset = prdctx->posctx[target].voltage_offset; 
+    prdctx->posctx[target].voltage_offset = fabs(voltage_offset) * -1.0F; 
+    prdctx->posctx[!target].voltage_offset = 0.0F; 
 
     if(prdctx->posctx[target].last_voltage_offset != prdctx->posctx[target].voltage_offset){ 
         push_event_log(" -> voltage_offset = {%f, %f}", 
@@ -166,7 +158,10 @@ static void line_tracing(t_periodic_context* prdctx){
     if(prdctx->last_line_sens != prdctx->line_sens){
         prdctx->last_line_sens_continuous_cnt = prdctx->line_sens_continuous_cnt;
         prdctx->line_sens_continuous_cnt = 0;
-        if(prdctx->state == STATE_LINE_IDLE && prdctx->line_sens != 0 && prdctx->line_sens != 7) prdctx->state = STATE_LINE_DRIVE;
+        if(prdctx->state == STATE_LINE_IDLE && prdctx->line_sens != 0 && prdctx->line_sens != 7){
+            prdctx->state = STATE_LINE_DRIVE;
+            prdctx->target_voltage = DRIVE_VOLTAGE_MAX;
+        }
         push_event_log("line_sens changed to %d", prdctx->line_sens);
     }
 
@@ -182,7 +177,7 @@ static void line_tracing(t_periodic_context* prdctx){
                 turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -CTRL_RESOLUTION * 0.4F));
                 prdctx->last_line_sens_continuous_cnt -= 2;
             }
-            else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 0.0F));
+            else turn_at_offset(prdctx, 0.0F);
         }
         else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, CTRL_RESOLUTION * 0.2F));
     }
@@ -193,7 +188,7 @@ static void line_tracing(t_periodic_context* prdctx){
                 turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, CTRL_RESOLUTION * 0.4F));
                 prdctx->last_line_sens_continuous_cnt -= 2;
             }
-            else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 0.0F));
+            else turn_at_offset(prdctx, 0.0F);
         }
         else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -CTRL_RESOLUTION * 0.2F));
     }
@@ -204,9 +199,9 @@ static void line_tracing(t_periodic_context* prdctx){
                 else if(prdctx->last_line_sens == 6) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, CTRL_RESOLUTION * 0.2F));
                 prdctx->last_line_sens_continuous_cnt -= 2;
             }
-            else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 0.0F));
+            else turn_at_offset(prdctx, 0.0F);
         }
-        else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 0.0F));
+        else turn_at_offset(prdctx, 0.0F);
     }
     prdctx->line_sens_continuous_cnt++;
 }
@@ -273,11 +268,13 @@ static bool periodic_routine(evdsptc_event_t* event){
             turn_at_offset(prdctx, 0.0F);
         }
 
-        v = (prdctx->posctx[i].voltage + prdctx->posctx[i].voltage_offset);
+        v = prdctx->posctx[i].voltage; 
+        if(v > 0.0F) v += prdctx->posctx[i].voltage_offset;
         if(fabs(v) < DECEL_VOLTAGE) v = 0.0F;
         v *= DIRECTION_CORRECTION[i];
         drv8830_move(&prdctx->posctx[i].conn, v);
 
+        prdctx->posctx[i].log[prdctx->posctx[i].period % LOG_SIZE].state = prdctx->state;
         prdctx->posctx[i].log[prdctx->posctx[i].period % LOG_SIZE].voltage = prdctx->posctx[i].voltage;
         prdctx->posctx[i].log[prdctx->posctx[i].period % LOG_SIZE].count = prdctx->posctx[i].count;
         prdctx->posctx[i].log[prdctx->posctx[i].period % LOG_SIZE].speed = prdctx->posctx[i].speed;
@@ -296,7 +293,7 @@ static void createresponse(char* buf, unsigned int size){
     return;
 }
 
-static int handler(struct mg_connection *conn, void *ignored)
+static int HttpHandler(struct mg_connection *conn, void *ignored)
 {
     char msg[BUFSIZ];
     unsigned long len;
@@ -358,52 +355,59 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
     char *val;
     float v = 0.0F;
     (void)conn;
-    (void)bits;
     (void)cbdata;
 
-    if(len >= BUFSIZ) len = BUFSIZ - 1;
-    memcpy(buf, data, len);
-    buf[len] = 0;
-    push_event_log("%s", buf);
-    
-    cmd = strtok_r(buf, ":", &c);
-    if(cmd != NULL){
-        val = strtok_r(NULL, ",", &c);
-        if(val != NULL) v = atof(val);
-    }
-    else cmd = "";
+    switch (((unsigned char)bits) & 0x0F) {
+    case WEBSOCKET_OPCODE_TEXT:
+        if(len >= BUFSIZ) len = BUFSIZ - 1;
+        memcpy(buf, data, len);
+        buf[len] = 0;
 
-    if(0 == strncmp("move_to", cmd, 6)) {
-        pthread_mutex_lock(&prdctx.mutex);
-        if(prdctx.state >= STATE_LINE_IDLE){
-            prdctx.state = STATE_REMOTE_IDLE; 
-            turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, 0.0F));
+        cmd = strtok_r(buf, ":", &c);
+        if(cmd != NULL){
+            val = strtok_r(NULL, ",", &c);
+            if(val != NULL) v = atof(val);
         }
-        prdctx.target_voltage = DRIVE_VOLTAGE_MAX;
-        move_forward_to(&prdctx, pow(2.0F, v) * 10.0F);
-        pthread_mutex_unlock(&prdctx.mutex);
-    }
-    else if(0 == strncmp("move_at", cmd, 6)) {
-        pthread_mutex_lock(&prdctx.mutex);
-        if(prdctx.state >= STATE_LINE_IDLE){
-            prdctx.state = STATE_REMOTE_IDLE; 
-            turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, 0.0F));
+        else cmd = "";
+
+        if(0 == strncmp("move_to", cmd, 6)) {
+            push_event_log("%s", buf);
+            pthread_mutex_lock(&prdctx.mutex);
+            if(prdctx.state >= STATE_LINE_IDLE){
+                prdctx.state = STATE_REMOTE_IDLE; 
+                turn_at_offset(&prdctx, 0.0F);
+            }
+            prdctx.target_voltage = DRIVE_VOLTAGE_MAX;
+            move_forward_to(&prdctx, pow(2.0F, v) * 10.0F);
+            pthread_mutex_unlock(&prdctx.mutex);
         }
-        move_forward_to(&prdctx, FLT_MAX);
-        prdctx.target_voltage = get_drive_voltage(v);
-        pthread_mutex_unlock(&prdctx.mutex);
-    }
-    else if(0 == strncmp("line_trace", cmd, 10)) {
-        pthread_mutex_lock(&prdctx.mutex);
-        if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, 0.0F));
-        prdctx.state = STATE_LINE_IDLE;
-        prdctx.target_voltage = get_drive_voltage(v);
-        pthread_mutex_unlock(&prdctx.mutex);
-    }
-    else if(0 == strncmp("turn", cmd, 4)) {
-        pthread_mutex_lock(&prdctx.mutex);
-        if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, v));
-        pthread_mutex_unlock(&prdctx.mutex);
+        else if(0 == strncmp("move_at", cmd, 6)) {
+            push_event_log("%s", buf);
+            pthread_mutex_lock(&prdctx.mutex);
+            if(prdctx.state >= STATE_LINE_IDLE){
+                prdctx.state = STATE_REMOTE_IDLE; 
+                turn_at_offset(&prdctx, 0.0F);
+            }
+            move_forward_to(&prdctx, FLT_MAX);
+            prdctx.target_voltage = get_drive_voltage(v);
+            pthread_mutex_unlock(&prdctx.mutex);
+        }
+        else if(0 == strncmp("line_trace", cmd, 10)) {
+            push_event_log("%s", buf);
+            pthread_mutex_lock(&prdctx.mutex);
+            if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, 0.0F);
+            prdctx.state = STATE_LINE_IDLE;
+            prdctx.target_voltage = get_drive_voltage(v);
+            pthread_mutex_unlock(&prdctx.mutex);
+        }
+        else if(0 == strncmp("turn", cmd, 4)) {
+            push_event_log("%s", buf);
+            pthread_mutex_lock(&prdctx.mutex);
+            if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, v));
+            pthread_mutex_unlock(&prdctx.mutex);
+        }
+    default:
+        break;
     }
     return 1;
 }
@@ -419,6 +423,11 @@ static void WebSocketCloseHandler(const struct mg_connection *conn, void *cbdata
     client->state = 0;
     client->conn = NULL;
     mg_unlock_context(ctx);
+
+    pthread_mutex_lock(&prdctx.mutex);
+    move_forward_to(&prdctx, 0.0F);
+    prdctx.target_voltage = 0.0F;
+    pthread_mutex_unlock(&prdctx.mutex);
 }
 
 void signal_handler(int signum) {
@@ -439,8 +448,8 @@ int main(int argc, char *argv[]){
 
     const char *options[] = { 
         "document_root", "./htdocs",
-        "request_timeout_ms", "10000",
-        "websocket_timeout_ms", "900000"
+        "request_timeout_ms", "5000",
+        "websocket_timeout_ms", "15000"
     };
     
     mg_init_library(0);
@@ -454,9 +463,17 @@ int main(int argc, char *argv[]){
     pthread_mutex_init(&elogmtx, &mutexattr);
     evdsptc_create(&elogth, NULL, NULL, NULL);
 
+    prdctx.initial = true;
+    prdctx.max = TICK_NS;
+    prdctx.min = TICK_NS;
+    prdctx.line_sens = 7;
+    prdctx.target_voltage = 0.0F;
+    prdctx.last_line_sens = 7;
+
     if(argc > 1 && argv[1] == index(argv[1], '-')){
         if(NULL != index(argv[1], 'l')){
             push_event_log("line tracing mode");
+            prdctx.target_voltage = DRIVE_VOLTAGE_MAX;
             prdctx.state = STATE_LINE_DRIVE;
         }
         if(NULL != index(argv[1], 'd')){
@@ -464,12 +481,6 @@ int main(int argc, char *argv[]){
         }
     }
 
-    prdctx.initial = true;
-    prdctx.max = TICK_NS;
-    prdctx.min = TICK_NS;
-    prdctx.line_sens = 7;
-    prdctx.target_voltage = 0.0F;
-    prdctx.last_line_sens = 7;
     pthread_mutex_init(&prdctx.mutex, &mutexattr);
 
     for(i = 0; i < 3; i++){
@@ -503,7 +514,7 @@ int main(int argc, char *argv[]){
     evdsptc_event_init(&ev, periodic_routine, (void*)&prdctx, false, NULL);
     evdsptc_post(&prdth, &ev);
 
-    mg_set_request_handler(mgctx, "/evrbcar", handler, NULL);
+    mg_set_request_handler(mgctx, "/evrbcar", HttpHandler, NULL);
     mg_set_websocket_handler(mgctx,
             "/websocket",
             WebSocketConnectHandler,
@@ -522,7 +533,8 @@ int main(int argc, char *argv[]){
     }
     if(dump){
         for(i = 0; i < LOG_SIZE; i++){
-            printf("%f, %d, %f, %f, %d, %f\n",
+            printf("%d, %f, %d, %f, %f, %d, %f\n",
+                    prdctx.posctx[0].log[(prdctx.posctx[0].period + i) % LOG_SIZE].state,
                     prdctx.posctx[0].log[(prdctx.posctx[0].period + i) % LOG_SIZE].voltage,
                     prdctx.posctx[0].log[(prdctx.posctx[0].period + i) % LOG_SIZE].count,
                     prdctx.posctx[0].log[(prdctx.posctx[0].period + i) % LOG_SIZE].speed,

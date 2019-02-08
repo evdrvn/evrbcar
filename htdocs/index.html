@@ -10,6 +10,7 @@
                 connection.onmessage = function (e) { 
                 };
                 connection.onerror = function (error) { alert('WebSocket error'); connection.close(); };
+                heartbeat(); 
             }
             function init() {
             }
@@ -22,6 +23,12 @@
             }
             function range() {
                 if(document.getElementById('ctrlform').mode.value != 'move_to') move();
+            }
+            function heartbeat() {
+                if (!connection) return;
+                if (connection.readyState != 1) return;
+                connection.send("heartbeat");
+                setTimeout(heartbeat, 1000);
             }
         </script>
         <style type="text/css">
@@ -49,10 +56,10 @@
             </tr>
             <tr height="180">
                 <td valign="center">
-                    <input type="range" id="range-1" class="vartical" value="0" min="0" max="5" step="1" onChange="range()"/>
+                    <input type="range" id="range-1" class="vartical" value="0" min="0" max="5" step="1" oninput="range()"/>
                 </td>
                 <td valign="bottom">
-                    <input type="range" id="range-2" value="0" min="-5" max="5" step="1" onChange="turn()"/>
+                    <input type="range" id="range-2" value="0" min="-5" max="5" step="1" oninput="turn()"/>
                 </td>
             </tr>
         </table>

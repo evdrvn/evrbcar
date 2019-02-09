@@ -15,7 +15,7 @@
 #define DISTANCE_PER_COUNT (215.0F / 40.0F) // mm
 #define LOG_SIZE (1024)
 #define PERIODS_SPEED_AVERAGE (16)
-#define DRIVE_VOLTAGE_MAX (4.50F)
+#define DRIVE_VOLTAGE_MAX (4.80F)
 #define DECEL_VOLTAGE (1.80F)
 #define STOP_START (DISTANCE_PER_COUNT * 2.0F)
 #define PERIODS_STOPPING (5)
@@ -29,7 +29,7 @@
 #define EVENT_LOG_LENGTH (64)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
-static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
+static int I2C_ADDRESS[MOTOR_NUM] = {0x65, 0x60};
 static int ROTENCDR_GPIO_PIN[MOTOR_NUM] = {23, 24};
 static int LINESENS_GPIO_PIN[3] = {22, 27, 17};
 static char EVENT_LOG_BUFFER[RING_BUFFER_SIZE][64];
@@ -406,6 +406,7 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
             if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, v));
             pthread_mutex_unlock(&prdctx.mutex);
         }
+	//else push_event_log("%s", buf);
     default:
         break;
     }

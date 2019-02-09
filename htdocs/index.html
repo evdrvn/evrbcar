@@ -26,8 +26,7 @@
             }
             function heartbeat() {
                 if (!connection) return;
-                if (connection.readyState != 1) return;
-                connection.send("heartbeat");
+                if (connection.readyState == 1) connection.send("heartbeat");
                 setTimeout(heartbeat, 1000);
             }
         </script>

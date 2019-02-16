@@ -1,9 +1,13 @@
 #include <limits.h>
 #include <float.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <stdarg.h>
 #include <signal.h>
 #include <math.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <wiringPi.h>
 #include <evdsptc.h>
 #include <drv8830-i2c.h>
@@ -27,6 +31,7 @@
 #define MAX_WS_CLIENTS (1)
 #define RING_BUFFER_SIZE (32)
 #define EVENT_LOG_LENGTH (64)
+#define UDP_PORT (65001)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x65, 0x60};
@@ -160,7 +165,7 @@ static void line_tracing(t_periodic_context* prdctx){
         prdctx->line_sens_continuous_cnt = 0;
         if(prdctx->state == STATE_LINE_IDLE && prdctx->line_sens != 0 && prdctx->line_sens != 7){
             prdctx->state = STATE_LINE_DRIVE;
-            prdctx->target_voltage = DRIVE_VOLTAGE_MAX;
+            //prdctx->target_voltage = DRIVE_VOLTAGE_MAX;
         }
         push_event_log("line_sens changed to %d", prdctx->line_sens);
     }
@@ -204,6 +209,18 @@ static void line_tracing(t_periodic_context* prdctx){
         else turn_at_offset(prdctx, 0.0F);
     }
     prdctx->line_sens_continuous_cnt++;
+}
+
+static bool udp_routine(evdsptc_event_t* event){
+    struct sockaddr clitSockAddr;
+    int sock = (int)evdsptc_event_getparam(event);
+    unsigned int sockaddrLen = sizeof(clitSockAddr);
+    char buffer[BUFSIZ];
+    
+    while(0 > recvfrom(sock, buffer, BUFSIZ, 0, &clitSockAddr, &sockaddrLen)){
+
+    }
+    return (bool)finalize;
 }
 
 static bool periodic_routine(evdsptc_event_t* event){
@@ -287,6 +304,42 @@ static bool periodic_routine(evdsptc_event_t* event){
     return (bool)finalize;
 }
 
+void cmd_move_to(float distance){
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state >= STATE_LINE_IDLE){
+        prdctx.state = STATE_REMOTE_IDLE; 
+        turn_at_offset(&prdctx, 0.0F);
+    }
+    prdctx.target_voltage = DRIVE_VOLTAGE_MAX;
+    move_forward_to(&prdctx, distance);
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
+void cmd_move_at(float target_voltage){
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state >= STATE_LINE_IDLE){
+        prdctx.state = STATE_REMOTE_IDLE; 
+        turn_at_offset(&prdctx, 0.0F);
+    }
+    move_forward_to(&prdctx, FLT_MAX);
+    prdctx.target_voltage = get_drive_voltage(target_voltage);
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
+void cmd_line_trace(float target_voltage){
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, 0.0F);
+    prdctx.state = STATE_LINE_IDLE;
+    prdctx.target_voltage = get_drive_voltage(target_voltage);
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
+void cmd_turn(float level){
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, level));
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
 static void createresponse(char* buf, unsigned int size){
     (void)buf;
     (void)size;
@@ -352,7 +405,7 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
     char buf[BUFSIZ]; 
     char *cmd = NULL;
     char *c;
-    char *val;
+    char *valstr;
     float v = 0.0F;
     (void)conn;
     (void)cbdata;
@@ -365,48 +418,30 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
 
         cmd = strtok_r(buf, ":", &c);
         if(cmd != NULL){
-            val = strtok_r(NULL, ",", &c);
-            if(val != NULL) v = atof(val);
+            valstr = strtok_r(NULL, ",", &c);
+            if(valstr != NULL){
+                v = atof(valstr);
+                valstr = strtok_r(NULL, ",", &c);
+            }
         }
         else cmd = "";
 
         if(0 == strncmp("move_to", cmd, 6)) {
             push_event_log("%s", buf);
-            pthread_mutex_lock(&prdctx.mutex);
-            if(prdctx.state >= STATE_LINE_IDLE){
-                prdctx.state = STATE_REMOTE_IDLE; 
-                turn_at_offset(&prdctx, 0.0F);
-            }
-            prdctx.target_voltage = DRIVE_VOLTAGE_MAX;
-            move_forward_to(&prdctx, pow(2.0F, v) * 10.0F);
-            pthread_mutex_unlock(&prdctx.mutex);
+            cmd_move_to(pow(2.0F, v) * 10.0F);
         }
         else if(0 == strncmp("move_at", cmd, 6)) {
             push_event_log("%s", buf);
-            pthread_mutex_lock(&prdctx.mutex);
-            if(prdctx.state >= STATE_LINE_IDLE){
-                prdctx.state = STATE_REMOTE_IDLE; 
-                turn_at_offset(&prdctx, 0.0F);
-            }
-            move_forward_to(&prdctx, FLT_MAX);
-            prdctx.target_voltage = get_drive_voltage(v);
-            pthread_mutex_unlock(&prdctx.mutex);
+            cmd_move_at(v);
         }
         else if(0 == strncmp("line_trace", cmd, 10)) {
             push_event_log("%s", buf);
-            pthread_mutex_lock(&prdctx.mutex);
-            if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, 0.0F);
-            prdctx.state = STATE_LINE_IDLE;
-            prdctx.target_voltage = get_drive_voltage(v);
-            pthread_mutex_unlock(&prdctx.mutex);
+            cmd_line_trace(v);
         }
         else if(0 == strncmp("turn", cmd, 4)) {
             push_event_log("%s", buf);
-            pthread_mutex_lock(&prdctx.mutex);
-            if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, v));
-            pthread_mutex_unlock(&prdctx.mutex);
+            cmd_turn(v);
         }
-	//else push_event_log("%s", buf);
     default:
         break;
     }
@@ -436,16 +471,44 @@ void signal_handler(int signum) {
     finalize = 1;
 }
 
+void sockaddr_init (const char *address, unsigned short port, struct sockaddr *sockaddr) {
+
+    struct sockaddr_in sockaddr_in;
+    sockaddr_in.sin_family = AF_INET;
+
+    if (inet_aton(address, &sockaddr_in.sin_addr) == 0) {
+        if (strcmp(address, "") == 0 ) {
+            sockaddr_in.sin_addr.s_addr = htonl(INADDR_ANY);
+        } else {
+            fprintf(stderr, "Invalid IP Address.\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (port == 0) {
+        fprintf(stderr, "invalid port number.\n");
+        exit(EXIT_FAILURE);
+    }
+    sockaddr_in.sin_port = htons(port);
+
+    *sockaddr = *((struct sockaddr *)&sockaddr_in);
+}
+
 int main(int argc, char *argv[]){
     struct timespec interval = { interval.tv_sec = 0, interval.tv_nsec = TICK_NS};
     pthread_t th;
     pthread_mutexattr_t mutexattr;
     struct sched_param param;
     evdsptc_context_t prdth;
+    evdsptc_context_t udpth;
     evdsptc_event_t ev;
     int i,j;
     struct mg_context *mgctx;
     bool dump = false;
+    const char *address = "";
+    unsigned short port = UDP_PORT;
+    struct sockaddr servSockAddr;
+    int server_sock;
 
     const char *options[] = { 
         "document_root", "./htdocs",
@@ -474,8 +537,7 @@ int main(int argc, char *argv[]){
     if(argc > 1 && argv[1] == index(argv[1], '-')){
         if(NULL != index(argv[1], 'l')){
             push_event_log("line tracing mode");
-            prdctx.target_voltage = DRIVE_VOLTAGE_MAX;
-            prdctx.state = STATE_LINE_DRIVE;
+            cmd_line_trace(DRIVE_VOLTAGE_MAX);
         }
         if(NULL != index(argv[1], 'd')){
             dump = true; 
@@ -504,7 +566,15 @@ int main(int argc, char *argv[]){
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+    server_sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    sockaddr_init(address, port, &servSockAddr);
+    if (bind(server_sock, &servSockAddr, sizeof(servSockAddr)) < 0) {
+        perror("bind() failed.");
+        exit(EXIT_FAILURE);
+    }
+
     evdsptc_create_periodic(&prdth, NULL, NULL, NULL, &interval);
+    evdsptc_create_periodic(&udpth, NULL, NULL, NULL, &interval);
 
     th = evdsptc_getthreads(&prdth)[0];
     param.sched_priority = 80;
@@ -514,6 +584,9 @@ int main(int argc, char *argv[]){
 
     evdsptc_event_init(&ev, periodic_routine, (void*)&prdctx, false, NULL);
     evdsptc_post(&prdth, &ev);
+
+    evdsptc_event_init(&ev, udp_routine, (void*)server_sock, false, NULL);
+    evdsptc_post(&udpth, &ev);
 
     mg_set_request_handler(mgctx, "/evrbcar", HttpHandler, NULL);
     mg_set_websocket_handler(mgctx,

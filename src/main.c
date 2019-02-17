@@ -32,6 +32,7 @@
 #define RING_BUFFER_SIZE (32)
 #define EVENT_LOG_LENGTH (64)
 #define UDP_PORT (65001)
+#define PERIODS_UDP_TIMEOUT (16)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x65, 0x60};
@@ -41,6 +42,7 @@ static char EVENT_LOG_BUFFER[RING_BUFFER_SIZE][64];
 static unsigned int event_log_index = 0;
 static pthread_mutex_t elogmtx;
 static evdsptc_context_t elogth;
+static int udp_timeout_count= -1;
 
 typedef enum drive_status{
     STATE_REMOTE_IDLE = 0,
@@ -51,6 +53,14 @@ typedef enum drive_status{
     STATE_LINE_DRIVE,
     STATE_LINE_STOP,
 } t_drive_status;
+
+typedef enum cmd_mode{
+    CMD_STOP = 0,
+    CMD_MOVE_TO,
+    CMD_MOVE_AT,
+    CMD_LINE_TRACE,
+    CMD_TURN,
+} t_cmd_mode;
 
 typedef struct posctrl_log {
     t_drive_status state;
@@ -93,6 +103,11 @@ typedef struct ws_client {
     struct mg_connection *conn;
     int state;
 } t_ws_client;
+
+typedef struct cmd_request {
+    t_cmd_mode mode;
+    float value[3];
+} t_cmd_request;
 
 static struct periodic_context prdctx;
 static t_ws_client ws_clients[MAX_WS_CLIENTS];
@@ -211,14 +226,85 @@ static void line_tracing(t_periodic_context* prdctx){
     prdctx->line_sens_continuous_cnt++;
 }
 
+void cmd_stop(){
+    push_event_log("stop: ");
+    pthread_mutex_lock(&prdctx.mutex);
+    move_forward_to(&prdctx, 0.0F);
+    prdctx.target_voltage = 0.0F;
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
+void cmd_move_to(float distance){
+    push_event_log("move_to: %f", distance);
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state >= STATE_LINE_IDLE){
+        prdctx.state = STATE_REMOTE_IDLE; 
+        turn_at_offset(&prdctx, 0.0F);
+    }
+    prdctx.target_voltage = DRIVE_VOLTAGE_MAX;
+    move_forward_to(&prdctx, distance);
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
+void cmd_move_at(float target_voltage){
+    push_event_log("move_at: %f", target_voltage);
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state >= STATE_LINE_IDLE){
+        prdctx.state = STATE_REMOTE_IDLE; 
+        turn_at_offset(&prdctx, 0.0F);
+    }
+    move_forward_to(&prdctx, FLT_MAX);
+    prdctx.target_voltage = get_drive_voltage(target_voltage);
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
+void cmd_line_trace(float target_voltage){
+    push_event_log("line_trace: %f", target_voltage);
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, 0.0F);
+    prdctx.state = STATE_LINE_IDLE;
+    prdctx.target_voltage = get_drive_voltage(target_voltage);
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
+void cmd_turn(float level){
+    push_event_log("turn: %f", level);
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, level));
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
 static bool udp_routine(evdsptc_event_t* event){
     struct sockaddr clitSockAddr;
     int sock = (int)evdsptc_event_getparam(event);
     unsigned int sockaddrLen = sizeof(clitSockAddr);
     char buffer[BUFSIZ];
-    
+    t_cmd_request *req;
+   
+    if(udp_timeout_count >= 0) udp_timeout_count++;
     while(0 > recvfrom(sock, buffer, BUFSIZ, 0, &clitSockAddr, &sockaddrLen)){
-
+       req = (t_cmd_request*)buffer;
+       switch(req->mode){
+       case CMD_MOVE_TO:
+           cmd_move_to(req->value[0]);
+           break;
+       case CMD_MOVE_AT:
+           cmd_move_at(req->value[0]);
+           break;
+       case CMD_LINE_TRACE:
+           cmd_line_trace(req->value[0]);
+           break;
+       case CMD_TURN:
+           cmd_turn(req->value[0]);
+           break;
+       default:
+           break;
+       }
+       udp_timeout_count = 0;
+    }
+    if(udp_timeout_count > PERIODS_UDP_TIMEOUT){
+        udp_timeout_count = -1;
+        cmd_stop();
     }
     return (bool)finalize;
 }
@@ -302,42 +388,6 @@ static bool periodic_routine(evdsptc_event_t* event){
     pthread_mutex_unlock(&prdctx->mutex);
    
     return (bool)finalize;
-}
-
-void cmd_move_to(float distance){
-    pthread_mutex_lock(&prdctx.mutex);
-    if(prdctx.state >= STATE_LINE_IDLE){
-        prdctx.state = STATE_REMOTE_IDLE; 
-        turn_at_offset(&prdctx, 0.0F);
-    }
-    prdctx.target_voltage = DRIVE_VOLTAGE_MAX;
-    move_forward_to(&prdctx, distance);
-    pthread_mutex_unlock(&prdctx.mutex);
-}
-
-void cmd_move_at(float target_voltage){
-    pthread_mutex_lock(&prdctx.mutex);
-    if(prdctx.state >= STATE_LINE_IDLE){
-        prdctx.state = STATE_REMOTE_IDLE; 
-        turn_at_offset(&prdctx, 0.0F);
-    }
-    move_forward_to(&prdctx, FLT_MAX);
-    prdctx.target_voltage = get_drive_voltage(target_voltage);
-    pthread_mutex_unlock(&prdctx.mutex);
-}
-
-void cmd_line_trace(float target_voltage){
-    pthread_mutex_lock(&prdctx.mutex);
-    if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, 0.0F);
-    prdctx.state = STATE_LINE_IDLE;
-    prdctx.target_voltage = get_drive_voltage(target_voltage);
-    pthread_mutex_unlock(&prdctx.mutex);
-}
-
-void cmd_turn(float level){
-    pthread_mutex_lock(&prdctx.mutex);
-    if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, level));
-    pthread_mutex_unlock(&prdctx.mutex);
 }
 
 static void createresponse(char* buf, unsigned int size){
@@ -427,19 +477,15 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
         else cmd = "";
 
         if(0 == strncmp("move_to", cmd, 6)) {
-            push_event_log("%s", buf);
             cmd_move_to(pow(2.0F, v) * 10.0F);
         }
         else if(0 == strncmp("move_at", cmd, 6)) {
-            push_event_log("%s", buf);
             cmd_move_at(v);
         }
         else if(0 == strncmp("line_trace", cmd, 10)) {
-            push_event_log("%s", buf);
             cmd_line_trace(v);
         }
         else if(0 == strncmp("turn", cmd, 4)) {
-            push_event_log("%s", buf);
             cmd_turn(v);
         }
     default:
@@ -460,10 +506,7 @@ static void WebSocketCloseHandler(const struct mg_connection *conn, void *cbdata
     client->conn = NULL;
     mg_unlock_context(ctx);
 
-    pthread_mutex_lock(&prdctx.mutex);
-    move_forward_to(&prdctx, 0.0F);
-    prdctx.target_voltage = 0.0F;
-    pthread_mutex_unlock(&prdctx.mutex);
+    cmd_stop();
 }
 
 void signal_handler(int signum) {

@@ -12,6 +12,7 @@
 #include <evdsptc.h>
 #include <drv8830-i2c.h>
 #include <civetweb.h>
+#include "evrbcar.h"
 
 #define TICK_NS (16 * 1000 * 1000LL)
 #define NS_AS_SEC (1000 * 1000 * 1000LL)
@@ -31,7 +32,6 @@
 #define MAX_WS_CLIENTS (1)
 #define RING_BUFFER_SIZE (32)
 #define EVENT_LOG_LENGTH (64)
-#define UDP_PORT (65001)
 #define PERIODS_UDP_TIMEOUT (16)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
@@ -53,14 +53,6 @@ typedef enum drive_status{
     STATE_LINE_DRIVE,
     STATE_LINE_STOP,
 } t_drive_status;
-
-typedef enum cmd_mode{
-    CMD_STOP = 0,
-    CMD_MOVE_TO,
-    CMD_MOVE_AT,
-    CMD_LINE_TRACE,
-    CMD_TURN,
-} t_cmd_mode;
 
 typedef struct posctrl_log {
     t_drive_status state;
@@ -103,11 +95,6 @@ typedef struct ws_client {
     struct mg_connection *conn;
     int state;
 } t_ws_client;
-
-typedef struct cmd_request {
-    t_cmd_mode mode;
-    float value[3];
-} t_cmd_request;
 
 static struct periodic_context prdctx;
 static t_ws_client ws_clients[MAX_WS_CLIENTS];
@@ -226,7 +213,7 @@ static void line_tracing(t_periodic_context* prdctx){
     prdctx->line_sens_continuous_cnt++;
 }
 
-void cmd_stop(){
+static void cmd_stop(){
     push_event_log("stop: ");
     pthread_mutex_lock(&prdctx.mutex);
     move_forward_to(&prdctx, 0.0F);
@@ -234,7 +221,7 @@ void cmd_stop(){
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
-void cmd_move_to(float distance){
+static void cmd_move_to(float distance){
     push_event_log("move_to: %f", distance);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state >= STATE_LINE_IDLE){
@@ -246,7 +233,7 @@ void cmd_move_to(float distance){
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
-void cmd_move_at(float target_voltage){
+static void cmd_move_at(float target_voltage){
     push_event_log("move_at: %f", target_voltage);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state >= STATE_LINE_IDLE){
@@ -258,7 +245,7 @@ void cmd_move_at(float target_voltage){
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
-void cmd_line_trace(float target_voltage){
+static void cmd_line_trace(float target_voltage){
     push_event_log("line_trace: %f", target_voltage);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, 0.0F);
@@ -267,7 +254,7 @@ void cmd_line_trace(float target_voltage){
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
-void cmd_turn(float level){
+static void cmd_turn(float level){
     push_event_log("turn: %f", level);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, level));
@@ -279,22 +266,22 @@ static bool udp_routine(evdsptc_event_t* event){
     int sock = (int)evdsptc_event_getparam(event);
     unsigned int sockaddrLen = sizeof(clitSockAddr);
     char buffer[BUFSIZ];
-    t_cmd_request *req;
+    t_evrbcar_cmd_request *req;
    
     if(udp_timeout_count >= 0) udp_timeout_count++;
     while(0 > recvfrom(sock, buffer, BUFSIZ, 0, &clitSockAddr, &sockaddrLen)){
-       req = (t_cmd_request*)buffer;
+       req = (t_evrbcar_cmd_request*)buffer;
        switch(req->mode){
-       case CMD_MOVE_TO:
+       case EVRBCAR_CMD_MOVE_TO:
            cmd_move_to(req->value[0]);
            break;
-       case CMD_MOVE_AT:
+       case EVRBCAR_CMD_MOVE_AT:
            cmd_move_at(req->value[0]);
            break;
-       case CMD_LINE_TRACE:
+       case EVRBCAR_CMD_LINE_TRACE:
            cmd_line_trace(req->value[0]);
            break;
-       case CMD_TURN:
+       case EVRBCAR_CMD_TURN:
            cmd_turn(req->value[0]);
            break;
        default:
@@ -509,12 +496,12 @@ static void WebSocketCloseHandler(const struct mg_connection *conn, void *cbdata
     cmd_stop();
 }
 
-void signal_handler(int signum) {
+static void signal_handler(int signum) {
     (void)signum;
     finalize = 1;
 }
 
-void sockaddr_init (const char *address, unsigned short port, struct sockaddr *sockaddr) {
+static void sockaddr_init (const char *address, unsigned short port, struct sockaddr *sockaddr) {
 
     struct sockaddr_in sockaddr_in;
     sockaddr_in.sin_family = AF_INET;
@@ -549,7 +536,7 @@ int main(int argc, char *argv[]){
     struct mg_context *mgctx;
     bool dump = false;
     const char *address = "";
-    unsigned short port = UDP_PORT;
+    unsigned short port = EVRBCAR_UDP_PORT;
     struct sockaddr servSockAddr;
     int server_sock;
 

@@ -1,6 +1,8 @@
 #ifndef __EVRBCAR_H__
 #define __EVRBCAR_H__
 
+#include <sys/socket.h>
+
 #define EVRBCAR_UDP_PORT (65001)
 
 typedef enum evrbcar_cmd_mode{
@@ -22,6 +24,7 @@ typedef struct evrbcar_udp_context {
 } t_evrbcar_udp_context;
 
 int evrbcar_udp_init(t_evrbcar_udp_context *udpctx, const char *address, unsigned short port);
+int evrbcar_udp_cmd_line_trace(t_evrbcar_udp_context *udpctx, float level);
 
 #endif
 

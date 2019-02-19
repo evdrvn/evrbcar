@@ -40,13 +40,13 @@ int evrbcar_udp_init(t_evrbcar_udp_context *udpctx, const char *address, unsigne
     return 0;
 }
 
-int evrbcar_udp_cmd_line_trace(t_evrbcar_udp_context *udpctx, float target_voltage){
+int evrbcar_udp_cmd_line_trace(t_evrbcar_udp_context *udpctx, float level){
     int sendSize;
     t_evrbcar_cmd_request req;
     int size = sizeof(t_evrbcar_cmd_request);
 
     req.mode = EVRBCAR_CMD_LINE_TRACE;
-    req.value[0] = target_voltage;
+    req.value[0] = level;
     sendSize = sendto(udpctx->sock, &req, size, 0, &udpctx->sockaddr, sizeof(udpctx->sockaddr));
     if (sendSize != size) return -1;
     return sendSize;

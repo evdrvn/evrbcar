@@ -1,5 +1,7 @@
 COMPILER  = gcc
+ARCHIVER  = ar
 CFLAGS    = -g -O2 -MMD -MP -Wall -Wextra
+ARFLAGS   = crsv
 EVDSPDIR  = ext/evdsptc
 DRVDIR    = ext/drv8830-i2c
 CVTWBDIR  = ext/civetweb
@@ -8,17 +10,32 @@ EVDSPLIB  = $(EVDSPDIR)/build/libevdsptc.a
 DRVLIB    = $(DRVDIR)/build/libdrv8830-i2c.a
 CVTWBLIB  = $(CVTWBDIR)/libcivetweb.a
 LIBS      = $(EVDSPLIB) $(DRVLIB) $(CVTWBLIB)
-INCLUDE   = -I./src -I$(EVDSPDIR)/src -I$(DRVDIR)/src -I$(CVTWBDIR)/include
+SRCDIR    = ./src
+INCLUDE   = -I$(SRCDIR) -I$(EVDSPDIR)/src -I$(DRVDIR)/src -I$(CVTWBDIR)/include
 
 TARGET    = evrbcar
-SRCDIR    = ./src
+UDPLIB    = lib$(TARGET)_udp.a
 SOURCES   = $(wildcard $(SRCDIR)/*.c)
-OBJDIR    = ./src
+OBJDIR    = $(SRCDIR)
 OBJECTS   = $(addprefix $(OBJDIR)/, $(notdir $(SOURCES:.c=.o)))
 DEPENDS   = $(OBJECTS:.o=.d)
 
+.PHONY: all
+all: clean $(TARGET) $(UDPLIB)
+
+.PHONY: clean
+clean:
+	-rm -f $(OBJECTS) $(DEPENDS) $(TARGET) $(UDPLIB)
+
+.PHONY: udplib
+udplib: $(UDPLIB)
+
 $(TARGET): $(OBJECTS) $(LIBS)
 	$(COMPILER) -o $@ $^ $(LDFLAGS)
+
+$(UDPLIB): $(SRCDIR)/udp.c
+	$(COMPILER) $(CFLAGS) -I$(SRCDIR) -o $(SRCDIR)/udp.o -c $<
+	$(ARCHIVER) $(ARFLAGS) -o $@ $(SRCDIR)/udp.o
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c
 	$(COMPILER) $(CFLAGS) $(INCLUDE) -o $@ -c $<
@@ -36,10 +53,5 @@ $(DRVLIB):
 $(CVTWBLIB):
 	cd $(CVTWBDIR);\
 	make lib lib WITH_WEBSOCKET=1;\
-
-all: clean $(TARGET)
-
-clean:
-	-rm -f $(OBJECTS) $(DEPENDS) $(TARGET)
 
 -include $(DEPENDS)

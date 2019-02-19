@@ -233,24 +233,28 @@ static void cmd_move_to(float distance){
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
-static void cmd_move_at(float target_voltage){
-    push_event_log("move_at: %f", target_voltage);
+static void cmd_move_at(float level){
+    push_event_log("move_at: %f", level);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state >= STATE_LINE_IDLE){
         prdctx.state = STATE_REMOTE_IDLE; 
         turn_at_offset(&prdctx, 0.0F);
     }
     move_forward_to(&prdctx, FLT_MAX);
-    prdctx.target_voltage = get_drive_voltage(target_voltage);
+    prdctx.target_voltage = get_drive_voltage(level);
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
-static void cmd_line_trace(float target_voltage){
-    push_event_log("line_trace: %f", target_voltage);
+static void cmd_line_trace(float level){
+    static float s_level;
+    if(s_level != level){
+        s_level = level;
+        push_event_log("line_trace: %f", level);
+    }
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, 0.0F);
     prdctx.state = STATE_LINE_IDLE;
-    prdctx.target_voltage = get_drive_voltage(target_voltage);
+    prdctx.target_voltage = get_drive_voltage(level);
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
@@ -269,7 +273,7 @@ static bool udp_routine(evdsptc_event_t* event){
     t_evrbcar_cmd_request *req;
    
     if(udp_timeout_count >= 0) udp_timeout_count++;
-    while(0 > recvfrom(sock, buffer, BUFSIZ, 0, &clitSockAddr, &sockaddrLen)){
+    while(0 < recvfrom(sock, buffer, BUFSIZ, 0, &clitSockAddr, &sockaddrLen)){
        req = (t_evrbcar_cmd_request*)buffer;
        switch(req->mode){
        case EVRBCAR_CMD_MOVE_TO:
@@ -531,7 +535,8 @@ int main(int argc, char *argv[]){
     struct sched_param param;
     evdsptc_context_t prdth;
     evdsptc_context_t udpth;
-    evdsptc_event_t ev;
+    evdsptc_event_t prdev;
+    evdsptc_event_t udpev;
     int i,j;
     struct mg_context *mgctx;
     bool dump = false;
@@ -542,13 +547,14 @@ int main(int argc, char *argv[]){
 
     const char *options[] = { 
         "document_root", "./htdocs",
-        "request_timeout_ms", "5000",
+        "request_timeout_ms", "10000",
         "websocket_timeout_ms", "15000"
+        "num_threads", "1",
+        0
     };
-    
     mg_init_library(0);
     mgctx = mg_start(NULL, 0, options);
-    
+   
     if(wiringPiSetupGpio() == -1) return 1; 
     
     pthread_mutexattr_init(&mutexattr);
@@ -612,11 +618,11 @@ int main(int argc, char *argv[]){
         printf("\nwarning : you get better performance to run as root via RT-Preempt.\n");
     }
 
-    evdsptc_event_init(&ev, periodic_routine, (void*)&prdctx, false, NULL);
-    evdsptc_post(&prdth, &ev);
+    evdsptc_event_init(&prdev, periodic_routine, (void*)&prdctx, false, NULL);
+    evdsptc_post(&prdth, &prdev);
 
-    evdsptc_event_init(&ev, udp_routine, (void*)server_sock, false, NULL);
-    evdsptc_post(&udpth, &ev);
+    evdsptc_event_init(&udpev, udp_routine, (void*)server_sock, false, NULL);
+    evdsptc_post(&udpth, &udpev);
 
     mg_set_request_handler(mgctx, "/evrbcar", HttpHandler, NULL);
     mg_set_websocket_handler(mgctx,
@@ -627,8 +633,12 @@ int main(int argc, char *argv[]){
             WebSocketCloseHandler,
             0);
     
-    evdsptc_event_waitdone(&ev);
+    evdsptc_event_waitdone(&prdev);
     evdsptc_destroy(&prdth, true);
+
+    pthread_cancel(evdsptc_getthreads(&udpth)[0]);
+    evdsptc_destroy(&udpth, true);
+    
     usleep(500 * 1000);
     evdsptc_destroy(&elogth, true);
 

@@ -21,11 +21,11 @@
 #define LOG_SIZE (1024)
 #define PERIODS_SPEED_AVERAGE (16)
 #define DRIVE_VOLTAGE_MAX (4.80F)
+#define DRIVE_VOLTAGE_MIN (1.20F)
 #define DECEL_VOLTAGE (1.80F)
 #define STOP_START (DISTANCE_PER_COUNT * 2.0F)
 #define PERIODS_STOPPING (5)
 #define DECEL_START (STOP_START * 3.0F)
-#define CTRL_RESOLUTION (5.0F)
 #define MOTOR_NUM (2)
 #define LINESENS_NUM (3)
 #define I2C_DEVNAME "/dev/i2c-1"
@@ -33,9 +33,10 @@
 #define RING_BUFFER_SIZE (32)
 #define EVENT_LOG_LENGTH (64)
 #define PERIODS_UDP_TIMEOUT (16)
+#define EPS (0.0001)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
-static int I2C_ADDRESS[MOTOR_NUM] = {0x65, 0x60};
+static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
 static int ROTENCDR_GPIO_PIN[MOTOR_NUM] = {23, 24};
 static int LINESENS_GPIO_PIN[3] = {22, 27, 17};
 static char EVENT_LOG_BUFFER[RING_BUFFER_SIZE][64];
@@ -153,12 +154,12 @@ static void turn_at_offset(t_periodic_context* prdctx, float voltage_offset){
 }
 
 static float get_curve_voltage_offset(float target_voltage, float level){
-    return level * (target_voltage - DECEL_VOLTAGE) / (CTRL_RESOLUTION - 1.0F);
+    return level * (target_voltage - DRIVE_VOLTAGE_MIN);
 }
 
 static float get_drive_voltage(float level){
-    if(level < 1.0F) return 0.0F;
-    return level * (DRIVE_VOLTAGE_MAX - DECEL_VOLTAGE) / (CTRL_RESOLUTION - 1.0F) + DECEL_VOLTAGE;
+    if(level < EPS) return 0.0F;
+    return level * (DRIVE_VOLTAGE_MAX - DECEL_VOLTAGE) + DECEL_VOLTAGE;
 }
 
 static void line_tracing(t_periodic_context* prdctx){
@@ -167,43 +168,42 @@ static void line_tracing(t_periodic_context* prdctx){
         prdctx->line_sens_continuous_cnt = 0;
         if(prdctx->state == STATE_LINE_IDLE && prdctx->line_sens != 0 && prdctx->line_sens != 7){
             prdctx->state = STATE_LINE_DRIVE;
-            //prdctx->target_voltage = DRIVE_VOLTAGE_MAX;
         }
         push_event_log("line_sens changed to %d", prdctx->line_sens);
     }
 
     if(prdctx->line_sens == 0){
         if(prdctx->line_sens_continuous_cnt > 30) prdctx->state = STATE_LINE_IDLE;
-        else if(prdctx->last_line_sens == 4) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -CTRL_RESOLUTION));
-        else if(prdctx->last_line_sens == 1) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, CTRL_RESOLUTION));
+        else if(prdctx->last_line_sens == 4) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -1.0F));
+        else if(prdctx->last_line_sens == 1) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 1.0F));
     }
-    else if(prdctx->line_sens == 1) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, CTRL_RESOLUTION * 0.8F));
+    else if(prdctx->line_sens == 1) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 0.8F));
     else if(prdctx->line_sens == 3){
         if(prdctx->last_line_sens == 1){
             if(prdctx->last_line_sens_continuous_cnt > 0){
-                turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -CTRL_RESOLUTION * 0.4F));
+                turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -0.4F));
                 prdctx->last_line_sens_continuous_cnt -= 2;
             }
             else turn_at_offset(prdctx, 0.0F);
         }
-        else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, CTRL_RESOLUTION * 0.2F));
+        else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 0.2F));
     }
-    else if(prdctx->line_sens == 4) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -CTRL_RESOLUTION * 0.8F));
+    else if(prdctx->line_sens == 4) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -0.8F));
     else if(prdctx->line_sens == 6){
         if(prdctx->last_line_sens == 4){
             if(prdctx->last_line_sens_continuous_cnt > 0){
-                turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, CTRL_RESOLUTION * 0.4F));
+                turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 0.4F));
                 prdctx->last_line_sens_continuous_cnt -= 2;
             }
             else turn_at_offset(prdctx, 0.0F);
         }
-        else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -CTRL_RESOLUTION * 0.2F));
+        else turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -0.2F));
     }
     else{
         if(prdctx->last_line_sens_continuous_cnt > 0){
             if(prdctx->last_line_sens_continuous_cnt > 0){
-                if(prdctx->last_line_sens == 3) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -CTRL_RESOLUTION * 0.2F));
-                else if(prdctx->last_line_sens == 6) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, CTRL_RESOLUTION * 0.2F));
+                if(prdctx->last_line_sens == 3) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, -0.2F));
+                else if(prdctx->last_line_sens == 6) turn_at_offset(prdctx, get_curve_voltage_offset(prdctx->target_voltage, 0.2F));
                 prdctx->last_line_sens_continuous_cnt -= 2;
             }
             else turn_at_offset(prdctx, 0.0F);
@@ -252,8 +252,10 @@ static void cmd_line_trace(float level){
         push_event_log("line_trace: %f", level);
     }
     pthread_mutex_lock(&prdctx.mutex);
-    if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, 0.0F);
-    prdctx.state = STATE_LINE_IDLE;
+    if(prdctx.state < STATE_LINE_IDLE){
+        turn_at_offset(&prdctx, 0.0F);
+        prdctx.state = STATE_LINE_IDLE;
+    }
     prdctx.target_voltage = get_drive_voltage(level);
     pthread_mutex_unlock(&prdctx.mutex);
 }
@@ -468,7 +470,7 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
         else cmd = "";
 
         if(0 == strncmp("move_to", cmd, 6)) {
-            cmd_move_to(pow(2.0F, v) * 10.0F);
+            cmd_move_to(2.0F * v * 10.0F);
         }
         else if(0 == strncmp("move_at", cmd, 6)) {
             cmd_move_at(v);
@@ -479,6 +481,7 @@ static int WebsocketDataHandler(struct mg_connection *conn, int bits, char *data
         else if(0 == strncmp("turn", cmd, 4)) {
             cmd_turn(v);
         }
+        break;
     default:
         break;
     }
@@ -502,7 +505,7 @@ static void WebSocketCloseHandler(const struct mg_connection *conn, void *cbdata
 
 static void signal_handler(int signum) {
     (void)signum;
-    finalize = 1;
+    finalize = true;
 }
 
 static void sockaddr_init (const char *address, unsigned short port, struct sockaddr *sockaddr) {
@@ -548,7 +551,7 @@ int main(int argc, char *argv[]){
     const char *options[] = { 
         "document_root", "./htdocs",
         "request_timeout_ms", "10000",
-        "websocket_timeout_ms", "15000"
+        "websocket_timeout_ms", "15000",
         "num_threads", "1",
         0
     };
@@ -573,7 +576,7 @@ int main(int argc, char *argv[]){
     if(argc > 1 && argv[1] == index(argv[1], '-')){
         if(NULL != index(argv[1], 'l')){
             push_event_log("line tracing mode");
-            cmd_line_trace(DRIVE_VOLTAGE_MAX);
+            cmd_line_trace(1.0F);
         }
         if(NULL != index(argv[1], 'd')){
             dump = true; 

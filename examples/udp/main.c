@@ -5,20 +5,18 @@
 
 #define TICK_NS (16 * 1000 * 1000LL)
 
+static float speed_rotation[] = {0.0F, 0.4F, 0.8F, 0.4F};
 static volatile sig_atomic_t finalize = 0;
-static float level = 2.5F;
-static unsigned int count = 0;
+static float level = 0.0F;
+static unsigned int current_index = 0;
 
 static void signal_handler(int signum) {
     (void)signum;
-    finalize = 1;
+    finalize = true;
 }
 static bool periodic_routine(evdsptc_event_t* event){
-    if(count % 1024 == 0) level = 2.5F;
-    else if(count % 512 == 0) level = 5.0F;
     t_evrbcar_udp_context* udpctx = (t_evrbcar_udp_context*)evdsptc_event_getparam(event);
     evrbcar_udp_cmd_line_trace(udpctx, level);
-    count++;
     return (bool)finalize;
 }
 
@@ -32,6 +30,8 @@ int main(int argc, char *argv[]){
     unsigned short port = EVRBCAR_UDP_PORT;
     char *address = "127.0.0.1";
     t_evrbcar_udp_context udpctx;
+    char c;
+    level = speed_rotation[0];
 
     pthread_mutexattr_init(&mutexattr);
     pthread_mutexattr_setprotocol(&mutexattr, PTHREAD_PRIO_INHERIT);
@@ -54,7 +54,15 @@ int main(int argc, char *argv[]){
     evdsptc_event_init(&ev, periodic_routine, (void*)&udpctx, false, NULL);
     evdsptc_post(&prdth, &ev);
 
+    while(!finalize){
+        printf("Input key q(uit), or other(changing speed): ");
+        c = getchar();
+        if(c == 'q' || c == 'Q') break;
+        level = speed_rotation[++current_index % 4];
+    }
+    finalize = true;
     evdsptc_event_waitdone(&ev);
+    evrbcar_udp_cmd_line_trace(&udpctx, 0.0F);
     evdsptc_destroy(&prdth, true);
 
     return 0;

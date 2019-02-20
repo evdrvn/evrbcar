@@ -33,7 +33,7 @@ udplib: $(UDPLIB)
 $(TARGET): $(OBJECTS) $(LIBS)
 	$(COMPILER) -o $@ $^ $(LDFLAGS)
 
-$(UDPLIB): $(SRCDIR)/udp.c
+$(UDPLIB): $(SRCDIR)/$(TARGET)_udp.c
 	$(COMPILER) $(CFLAGS) -I$(SRCDIR) -o $(SRCDIR)/udp.o -c $<
 	$(ARCHIVER) $(ARFLAGS) -o $@ $(SRCDIR)/udp.o
 

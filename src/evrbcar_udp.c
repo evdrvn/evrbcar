@@ -46,7 +46,20 @@ int evrbcar_udp_cmd_line_trace(t_evrbcar_udp_context *udpctx, float level){
     int size = sizeof(t_evrbcar_cmd_request);
 
     req.mode = EVRBCAR_CMD_LINE_TRACE;
-    req.value[0] = level;
+    req.fvalue[0] = level;
+    sendSize = sendto(udpctx->sock, &req, size, 0, &udpctx->sockaddr, sizeof(udpctx->sockaddr));
+    if (sendSize != size) return -1;
+    return sendSize;
+}
+
+int evrbcar_udp_cmd_ext_line_trace(t_evrbcar_udp_context *udpctx, float level, int linesens){
+    int sendSize;
+    t_evrbcar_cmd_request req;
+    int size = sizeof(t_evrbcar_cmd_request);
+
+    req.mode = EVRBCAR_CMD_EXT_LINE_TRACE;
+    req.fvalue[0] = level;
+    req.ivalue[0] = linesens;
     sendSize = sendto(udpctx->sock, &req, size, 0, &udpctx->sockaddr, sizeof(udpctx->sockaddr));
     if (sendSize != size) return -1;
     return sendSize;

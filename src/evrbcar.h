@@ -9,13 +9,15 @@ typedef enum evrbcar_cmd_mode{
     EVRBCAR_CMD_STOP = 0,
     EVRBCAR_CMD_MOVE_TO,
     EVRBCAR_CMD_MOVE_AT,
-    EVRBCAR_CMD_LINE_TRACE,
     EVRBCAR_CMD_TURN,
+    EVRBCAR_CMD_LINE_TRACE,
+    EVRBCAR_CMD_EXT_LINE_TRACE,
 } t_evrbcar_cmd_mode;
 
 typedef struct evrbcar_cmd_request {
     t_evrbcar_cmd_mode mode;
-    float value[3];
+    int ivalue[2];
+    float fvalue[2];
 } t_evrbcar_cmd_request;
 
 typedef struct evrbcar_udp_context {
@@ -25,6 +27,7 @@ typedef struct evrbcar_udp_context {
 
 int evrbcar_udp_init(t_evrbcar_udp_context *udpctx, const char *address, unsigned short port);
 int evrbcar_udp_cmd_line_trace(t_evrbcar_udp_context *udpctx, float level);
+int evrbcar_udp_cmd_ext_line_trace(t_evrbcar_udp_context *udpctx, float level, int linesens);
 
 #endif
 

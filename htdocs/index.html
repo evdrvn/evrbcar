@@ -18,7 +18,7 @@
                 connection.send("turn:" + parseFloat(document.getElementById('range-2').value) / 5.0);
             }
             function move() {
-                connection.send(document.getElementById('ctrlform').mode.value + ':' + parseFloat(document.getElementById('range-1').value) / 10.0);
+                connection.send(document.getElementById('ctrlform').mode.value + ':' + parseFloat(document.getElementById('range-1').value) / 5.0);
                 turn(); 
             }
             function range() {

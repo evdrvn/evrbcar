@@ -15,10 +15,10 @@
             function init() {
             }
             function turn() {
-                connection.send("turn:" + parseFloat(document.getElementById('range-2').value) / 5.0);
+                connection.send("turn:" + parseFloat(document.getElementById('range-2').value) / 3.0);
             }
             function move() {
-                connection.send(document.getElementById('ctrlform').mode.value + ':' + parseFloat(document.getElementById('range-1').value) / 5.0);
+                connection.send(document.getElementById('ctrlform').mode.value + ':' + parseFloat(document.getElementById('range-1').value) / 3.0);
                 turn(); 
             }
             function range() {
@@ -55,10 +55,10 @@
             </tr>
             <tr height="180">
                 <td valign="center">
-                    <input type="range" id="range-1" class="vartical" value="0" min="-5" max="5" step="1" oninput="range()"/>
+                    <input type="range" id="range-1" class="vartical" value="0" min="-3" max="3" step="1" oninput="range()"/>
                 </td>
                 <td valign="center">
-                    <input type="range" id="range-2" value="0" min="-5" max="5" step="1" oninput="turn()"/>
+                    <input type="range" id="range-2" value="0" min="-3" max="3" step="1" oninput="turn()"/>
                 </td>
             </tr>
         </table>

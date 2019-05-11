@@ -8,6 +8,7 @@
 #include <math.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <wiringPi.h>
 #include <evdsptc.h>
@@ -21,7 +22,7 @@
 #define DISTANCE_PER_COUNT (215.0F / 40.0F) // mm
 #define LOG_SIZE (1024)
 #define PERIODS_SPEED_AVERAGE (16)
-#define DRIVE_VOLTAGE_MAX (4.80F)
+#define DRIVE_VOLTAGE_MAX (6.40F)
 #define DRIVE_VOLTAGE_MIN (1.20F)
 #define DECEL_VOLTAGE (1.80F)
 #define STOP_START (DISTANCE_PER_COUNT * 2.0F)
@@ -285,15 +286,27 @@ static void cmd_turn(float level){
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
+static void cmd_connect(int sock, struct sockaddr_in *clitSockAddr){
+    struct sockaddr_in sockAddr;
+    char clitaddr[256];
+    t_evrbcar_cmd_response res; 
+    
+    inet_ntop(AF_INET, &clitSockAddr->sin_addr, clitaddr, sizeof(clitaddr));
+    push_event_log("connect: from client %s", clitaddr);
+
+    res.mode = EVRBCAR_CMD_CONNECT; 
+    sendto(sock, (char *)&res, sizeof(t_evrbcar_cmd_response), 0, (struct sockaddr *)&sockAddr, sizeof(sockAddr));
+}
+
 static bool udp_routine(evdsptc_event_t* event){
-    struct sockaddr clitSockAddr;
+    struct sockaddr_in clitSockAddr;
     int sock = (int)evdsptc_event_getparam(event);
     unsigned int sockaddrLen = sizeof(clitSockAddr);
     char buffer[BUFSIZ];
     t_evrbcar_cmd_request *req;
    
     if(udp_timeout_count >= 0) udp_timeout_count++;
-    while(0 < recvfrom(sock, buffer, BUFSIZ, 0, &clitSockAddr, &sockaddrLen)){
+    while(0 < recvfrom(sock, buffer, BUFSIZ, 0, (struct sockaddr *)&clitSockAddr, &sockaddrLen)){
        req = (t_evrbcar_cmd_request*)buffer;
        switch(req->mode){
        case EVRBCAR_CMD_MOVE_TO:
@@ -310,6 +323,13 @@ static bool udp_routine(evdsptc_event_t* event){
            break;
        case EVRBCAR_CMD_TURN:
            cmd_turn(req->fvalue[0]);
+           break;
+       case EVRBCAR_CMD_MOVE_TURN:
+           cmd_move_at(req->fvalue[0]);
+           cmd_turn(req->fvalue[1]);
+           break;
+       case EVRBCAR_CMD_CONNECT:
+           cmd_connect(sock, &clitSockAddr);
            break;
        default:
            break;

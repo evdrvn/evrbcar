@@ -286,16 +286,23 @@ static void cmd_turn(float level){
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
-static void cmd_connect(int sock, struct sockaddr_in *clitSockAddr){
-    struct sockaddr_in sockAddr;
+static void cmd_connect(struct sockaddr_in *clitSockAddr){
+    struct sockaddr_in addr;
     char clitaddr[256];
+    int sock;
     t_evrbcar_cmd_response res; 
-    
+   
     inet_ntop(AF_INET, &clitSockAddr->sin_addr, clitaddr, sizeof(clitaddr));
-    push_event_log("connect: from client %s", clitaddr);
+    push_event_log("connect: from client %s:%d", clitaddr, clitSockAddr->sin_port);
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(CLIENT_UDP_PORT);
+    addr.sin_addr = clitSockAddr->sin_addr;
 
     res.mode = EVRBCAR_CMD_CONNECT; 
-    sendto(sock, (char *)&res, sizeof(t_evrbcar_cmd_response), 0, (struct sockaddr *)&sockAddr, sizeof(sockAddr));
+    sendto(sock, (char *)&res, sizeof(t_evrbcar_cmd_response), 0, (struct sockaddr *)&addr, sizeof(addr));
 }
 
 static bool udp_routine(evdsptc_event_t* event){
@@ -329,7 +336,7 @@ static bool udp_routine(evdsptc_event_t* event){
            cmd_turn(req->fvalue[1]);
            break;
        case EVRBCAR_CMD_CONNECT:
-           cmd_connect(sock, &clitSockAddr);
+           cmd_connect(&clitSockAddr);
            break;
        default:
            break;

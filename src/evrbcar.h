@@ -3,6 +3,7 @@
 
 #include <sys/socket.h>
 
+#define CLIENT_UDP_PORT (65000)
 #define EVRBCAR_UDP_PORT (65001)
 
 typedef enum evrbcar_cmd_mode{

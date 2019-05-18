@@ -59,6 +59,11 @@ void setup() {
                 wifiUdp.write((uint8_t*)&request, sizeof(request));
                 wifiUdp.endPacket();
 
+                Serial.print("sending connect request: ");
+                Serial.print(request.mode);
+                Serial.print(", port = ");
+                Serial.println(EVRBCAR_UDP_PORT);
+
                 packetSize = wifiUdp.parsePacket(); 
                 wifiUdp.read(packetBuffer, UDP_TX_PACKET_MAX_SIZE);
                 response = (t_evrbcar_cmd_response*)packetBuffer;

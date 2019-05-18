@@ -1,8 +1,6 @@
 #ifndef __EVRBCAR_H__
 #define __EVRBCAR_H__
 
-#include <sys/socket.h>
-
 #define EVRBCAR_UDP_PORT (65001)
 
 typedef enum evrbcar_cmd_mode{
@@ -20,6 +18,16 @@ typedef struct evrbcar_cmd_request {
     float fvalue[2];
 } t_evrbcar_cmd_request;
 
+typedef struct evrbcar_cmd_response {
+    t_evrbcar_cmd_mode mode;
+    int ivalue[2];
+    float fvalue[2];
+} t_evrbcar_cmd_response;
+
+#ifndef __JOYSTICK__
+
+#include <sys/socket.h>
+
 typedef struct evrbcar_udp_context {
     int sock;
     struct sockaddr sockaddr;
@@ -29,5 +37,6 @@ int evrbcar_udp_init(t_evrbcar_udp_context *udpctx, const char *address, unsigne
 int evrbcar_udp_cmd_line_trace(t_evrbcar_udp_context *udpctx, float level);
 int evrbcar_udp_cmd_ext_line_trace(t_evrbcar_udp_context *udpctx, float level, int linesens);
 
+#endif
 #endif
 

@@ -15,12 +15,12 @@
 #include <drv8830-i2c.h>
 #include <civetweb.h>
 #include "evrbcar.h"
+#include "evrbcar_elog.h"
 
 #define TICK_NS (16 * 1000 * 1000LL)
 #define NS_AS_SEC (1000 * 1000 * 1000LL)
 #define TICK_SEC (TICK_NS / (float)NS_AS_SEC)
 #define DISTANCE_PER_COUNT (215.0F / 40.0F) // mm
-#define LOG_SIZE (1024)
 #define PERIODS_SPEED_AVERAGE (16)
 #define DRIVE_VOLTAGE_MAX (6.40F)
 #define DRIVE_VOLTAGE_MIN (1.20F)
@@ -32,8 +32,6 @@
 #define LINESENS_NUM (3)
 #define I2C_DEVNAME "/dev/i2c-1"
 #define MAX_WS_CLIENTS (1)
-#define RING_BUFFER_SIZE (32)
-#define EVENT_LOG_LENGTH (64)
 #define PERIODS_UDP_TIMEOUT (16)
 #define EPS (0.0001)
 
@@ -41,10 +39,6 @@ static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
 static int ROTENCDR_GPIO_PIN[MOTOR_NUM] = {23, 24};
 static int LINESENS_GPIO_PIN[3] = {22, 27, 17};
-static char EVENT_LOG_BUFFER[RING_BUFFER_SIZE][64];
-static volatile unsigned int event_log_index = 0;
-static pthread_mutex_t elogmtx;
-static evdsptc_context_t elogth;
 static volatile int udp_timeout_count= -1;
 static volatile bool enable_ext_linesens = false;
 static volatile int ext_linesens = 7;
@@ -104,33 +98,6 @@ typedef struct ws_client {
 static struct periodic_context prdctx;
 static t_ws_client ws_clients[MAX_WS_CLIENTS];
 static volatile sig_atomic_t finalize = 0;
-
-static bool print_event_log(evdsptc_event_t* event){
-    printf("%s\n", EVENT_LOG_BUFFER[(unsigned int)evdsptc_event_getparam(event)]);
-    fflush(stdout);
-    return true;
-}
-
-static void push_event_log(const char *fmt, ...){
-    va_list ap;
-    unsigned int index;
-    evdsptc_event_t *ev; 
-
-    pthread_mutex_lock(&elogmtx);
-    index = event_log_index % RING_BUFFER_SIZE;
-    event_log_index++;
-    pthread_mutex_unlock(&elogmtx);
-    
-    va_start(ap, fmt);
-    vsnprintf(EVENT_LOG_BUFFER[index], EVENT_LOG_LENGTH - 1, fmt, ap);
-    va_end(ap);
-
-    ev = malloc(sizeof(evdsptc_event_t));
-    if(ev != NULL){
-        evdsptc_event_init(ev, print_event_log, (void*)index, true, NULL);
-        evdsptc_post(&elogth, ev);
-    }
-}
 
 static long long int timespec_diff(struct timespec *t1, struct timespec *t2){
     return  t2->tv_nsec - t1->tv_nsec + (t2->tv_sec - t1->tv_sec) * NS_AS_SEC;
@@ -610,6 +577,8 @@ int main(int argc, char *argv[]){
     int server_sock;
     int ioctlval = 0;
 
+    init_event_log();
+
     const char *options[] = { 
         "document_root", "./htdocs",
         "request_timeout_ms", "10000",
@@ -625,8 +594,6 @@ int main(int argc, char *argv[]){
     pthread_mutexattr_init(&mutexattr);
     pthread_mutexattr_setprotocol(&mutexattr, PTHREAD_PRIO_INHERIT);
     evdsptc_setmutexattrinitializer(&mutexattr);
-    pthread_mutex_init(&elogmtx, &mutexattr);
-    evdsptc_create(&elogth, NULL, NULL, NULL);
 
     prdctx.initial = true;
     prdctx.max = TICK_NS;
@@ -707,7 +674,7 @@ int main(int argc, char *argv[]){
     evdsptc_destroy(&udpth, true);
     
     usleep(500 * 1000);
-    evdsptc_destroy(&elogth, true);
+    destroy_event_log();
 
     for(j = 0; j < MOTOR_NUM; j++){
         drv8830_move(&prdctx.posctx[j].conn, 0.0F);

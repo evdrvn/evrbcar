@@ -7,3 +7,6 @@
 [submodule "ext/civetweb"]
 	path = ext/civetweb
 	url = https://github.com/civetweb/civetweb
+[submodule "ext/bno055-i2c"]
+	path = ext/bno055-i2c
+	url = https://github.com/evdrvn/bno055-i2c

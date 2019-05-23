@@ -6,14 +6,16 @@ EVDSPDIR  = ../ext/evdsptc
 DRVDIR    = ../ext/drv8830-i2c
 CVTWBDIR  = ../ext/civetweb
 BNO055DIR = ../ext/bno055-i2c
+VL53L0XDIR= ../ext/VL53L0X_1.0.2
 LDFLAGS   = -L$(EVDSPDIR)/build -lwiringPi -lpthread -ldl -lm
 EVDSPLIB  = $(EVDSPDIR)/build/libevdsptc.a
 DRVLIB    = $(DRVDIR)/build/libdrv8830-i2c.a
 CVTWBLIB  = $(CVTWBDIR)/libcivetweb.a
 BNO055LIB = $(BNO055DIR)/build/libbno055-i2c.a
-LIBS      = $(EVDSPLIB) $(DRVLIB) $(CVTWBLIB) $(BNO055LIB)
+VL53L0XLIB= $(VL53L0XDIR)/../VL53L0X_rasp/bin/libVL53L0X_Rasp.a
+LIBS      = $(EVDSPLIB) $(DRVLIB) $(CVTWBLIB) $(BNO055LIB) $(VL53L0XLIB)
 SRCDIR    = ./src
-INCLUDE   = -I$(SRCDIR) -I$(EVDSPDIR)/src -I$(DRVDIR)/src -I$(CVTWBDIR)/include -I$(BNO055DIR)/src
+INCLUDE   = -I$(SRCDIR) -I$(EVDSPDIR)/src -I$(DRVDIR)/src -I$(CVTWBDIR)/include -I$(BNO055DIR)/src -I$(VL53L0XDIR)/Api/core/inc
 
 TARGET    = evrbcar
 UDPLIB    = lib$(TARGET)_udp.a
@@ -60,5 +62,9 @@ $(BNO055LIB):
 	cd $(BNO055DIR)/build;\
 	cmake ..;\
 	make;\
+
+$(VL53L0XLIB):
+	cd $(VL53L0XDIR)/../VL53L0X_rasp;\
+	make API_DIR=../VL53L0X_1.0.2;\
 
 -include $(DEPENDS)

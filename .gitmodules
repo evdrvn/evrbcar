@@ -10,3 +10,6 @@
 [submodule "ext/bno055-i2c"]
 	path = ext/bno055-i2c
 	url = https://github.com/evdrvn/bno055-i2c
+[submodule "ext/VL53L0X_rasp"]
+	path = ext/VL53L0X_rasp
+	url = https://github.com/cassou/VL53L0X_rasp

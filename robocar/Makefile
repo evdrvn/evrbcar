@@ -15,7 +15,7 @@ BNO055LIB = $(BNO055DIR)/build/libbno055-i2c.a
 VL53L0XLIB= $(VL53L0XDIR)/../VL53L0X_rasp/bin/libVL53L0X_Rasp.a
 LIBS      = $(EVDSPLIB) $(DRVLIB) $(CVTWBLIB) $(BNO055LIB) $(VL53L0XLIB)
 SRCDIR    = ./src
-INCLUDE   = -I$(SRCDIR) -I$(EVDSPDIR)/src -I$(DRVDIR)/src -I$(CVTWBDIR)/include -I$(BNO055DIR)/src -I$(VL53L0XDIR)/Api/core/inc
+INCLUDE   = -I$(SRCDIR) -I$(EVDSPDIR)/src -I$(DRVDIR)/src -I$(CVTWBDIR)/include -I$(BNO055DIR)/src -I$(VL53L0XDIR)/Api/core/inc -I$(VL53L0XDIR)/../VL53L0X_rasp/platform/inc
 
 TARGET    = evrbcar
 UDPLIB    = lib$(TARGET)_udp.a

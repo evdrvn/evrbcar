@@ -15,9 +15,13 @@
 #include <drv8830-i2c.h>
 #include <civetweb.h>
 #include <bno055-i2c.h>
+#include <vl53l0x_api.h>
+#include <vl53l0x_api.h>
+
 #include "evrbcar.h"
 #include "evrbcar_elog.h"
 #include "evrbcar_imu.h"
+#include "evrbcar_tof.h"
 
 #define TICK_NS (16 * 1000 * 1000LL)
 #define NS_AS_SEC (1000 * 1000 * 1000LL)
@@ -578,10 +582,12 @@ int main(int argc, char *argv[]){
     struct sockaddr servSockAddr;
     int server_sock;
     int ioctlval = 0;
-    bno055_conn_t conn;
-    
+    bno055_conn_t imuctx;
+    VL53L0X_Dev_t tofctx;
+   
     init_event_log();
-    evrbcar_imu_init(&conn, I2C_DEVNAME, BNO055_ADDRESS_A);
+    evrbcar_imu_init(&imuctx, I2C_DEVNAME, BNO055_ADDRESS_A);
+    evrbcar_tof_init(&tofctx, I2C_DEVNAME, 0x29);
 
     const char *options[] = { 
         "document_root", "./htdocs",

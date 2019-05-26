@@ -9,6 +9,8 @@
 #define VERSION_REQUIRED_BUILD 1
 
 int evrbcar_tof_init(VL53L0X_Dev_t* tofctx, char* dev, uint8_t addr);
+int evrbcar_tof_measure(VL53L0X_Dev_t *tofctx, uint32_t *range);
+int evrbcar_tof_destroy(VL53L0X_Dev_t* tofctx);
 
 #endif//__EVRBCAR_TOF_H__
 

@@ -48,7 +48,9 @@ static int LINESENS_GPIO_PIN[3] = {22, 27, 17};
 static volatile int udp_timeout_count= -1;
 static volatile bool enable_ext_linesens = false;
 static volatile int ext_linesens = 7;
-
+static bno055_conn_t imuctx;
+static VL53L0X_Dev_t tofctx;
+ 
 typedef enum drive_status{
     STATE_REMOTE_IDLE = 0,
     STATE_REMOTE_DRIVE,
@@ -329,6 +331,8 @@ static bool periodic_routine(evdsptc_event_t* event){
     long long int interval = TICK_NS;
     int i, input;
     float v;
+    static int count;
+    uint32_t measure;
 
     clock_gettime(CLOCK_REALTIME, &now);
     if(prdctx->initial) prdctx->initial = false;
@@ -336,7 +340,12 @@ static bool periodic_routine(evdsptc_event_t* event){
     prdctx->prev = now;
     if(interval < prdctx->min) prdctx->min = interval;
     if(interval > prdctx->max) prdctx->max = interval;
-    
+   
+    if(count++ % 64 == 0){
+        evrbcar_tof_measure(&tofctx, &measure);
+        push_event_log("tof measure = %d", measure);
+    }
+
     pthread_mutex_lock(&prdctx->mutex);
    
     prdctx->last_linesens = prdctx->linesens;
@@ -582,9 +591,7 @@ int main(int argc, char *argv[]){
     struct sockaddr servSockAddr;
     int server_sock;
     int ioctlval = 0;
-    bno055_conn_t imuctx;
-    VL53L0X_Dev_t tofctx;
-   
+  
     init_event_log();
     evrbcar_imu_init(&imuctx, I2C_DEVNAME, BNO055_ADDRESS_A);
     evrbcar_tof_init(&tofctx, I2C_DEVNAME, 0x29);
@@ -682,6 +689,8 @@ int main(int argc, char *argv[]){
 
     pthread_cancel(evdsptc_getthreads(&udpth)[0]);
     evdsptc_destroy(&udpth, true);
+    
+    evrbcar_tof_destroy(&tofctx);
     
     usleep(500 * 1000);
     destroy_event_log();

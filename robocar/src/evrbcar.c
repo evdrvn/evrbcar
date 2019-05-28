@@ -333,6 +333,7 @@ static bool periodic_routine(evdsptc_event_t* event){
     float v;
     static int count;
     uint32_t measure;
+    double euler[3] = {0};
 
     clock_gettime(CLOCK_REALTIME, &now);
     if(prdctx->initial) prdctx->initial = false;
@@ -342,8 +343,9 @@ static bool periodic_routine(evdsptc_event_t* event){
     if(interval > prdctx->max) prdctx->max = interval;
    
     if(count++ % 64 == 0){
+        evrbcar_imu_measure(&imuctx, euler);
         evrbcar_tof_measure(&tofctx, &measure);
-        push_event_log("tof measure = %d", measure);
+        push_event_log("imu = %f, %f, %f, tof = %d", euler[0], euler[1], euler[2], measure);
     }
 
     pthread_mutex_lock(&prdctx->mutex);
@@ -690,6 +692,7 @@ int main(int argc, char *argv[]){
     pthread_cancel(evdsptc_getthreads(&udpth)[0]);
     evdsptc_destroy(&udpth, true);
     
+    evrbcar_imu_destroy(&imuctx);
     evrbcar_tof_destroy(&tofctx);
     
     usleep(500 * 1000);

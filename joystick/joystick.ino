@@ -121,7 +121,7 @@ void loop() {
     request.mode = EVRBCAR_CMD_MOVE_TURN;
     request.fvalue[0] = convraw2a(rawX);
     request.fvalue[1] = convraw2a(rawY);
-    request.ivalue[0] = digitalRead(SW_PIN);
+    request.ivalue[0] = !digitalRead(SW_PIN);
 
     Serial.printf("Y=%4d(%f), X=%4d(%f), SW=%d \n",
             rawX,
@@ -134,6 +134,12 @@ void loop() {
     wifiUdp.write((uint8_t*)&request, sizeof(request));
     wifiUdp.endPacket();
 
+    if(prev.ivalue[0] == 0 && request.ivalue[0] == 1) {
+        request.mode = EVRBCAR_CMD_SCAN;
+        wifiUdp.beginPacket(wifiUdp.remoteIP(), EVRBCAR_UDP_PORT);
+        wifiUdp.write((uint8_t*)&request, sizeof(request));
+        wifiUdp.endPacket();
+    }
     prev = request;
 
     digitalWrite(LED_PIN, cnt++ % 2);

@@ -364,7 +364,6 @@ static bool periodic_routine(evdsptc_event_t* event){
 
     evrbcar_imu_measure(&imuctx, euler);
     evrbcar_tof_measure(&tofctx, &measure);
-   
     
     pthread_mutex_lock(&prdctx->mutex);
    

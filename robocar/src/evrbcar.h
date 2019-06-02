@@ -13,6 +13,7 @@ typedef enum evrbcar_cmd_mode{
     EVRBCAR_CMD_EXT_LINE_TRACE,
     EVRBCAR_CMD_MOVE_TURN,
     EVRBCAR_CMD_CONNECT = 129,
+    EVRBCAR_CMD_SCAN,
 } t_evrbcar_cmd_mode;
 
 typedef struct evrbcar_cmd_request {

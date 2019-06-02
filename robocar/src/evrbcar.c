@@ -26,12 +26,14 @@
 #define TICK_NS (16 * 1000 * 1000LL)
 #define NS_AS_SEC (1000 * 1000 * 1000LL)
 #define TICK_SEC (TICK_NS / (float)NS_AS_SEC)
-#define DISTANCE_PER_COUNT (215.0F / 40.0F) // mm
-#define PERIODS_SPEED_AVERAGE (16)
+#define PULSE_PER_REVOLUTION (40.0F)
+#define WHEEL_CIRCUMFERENCE (0.215F) //m
+#define WHEEL_RADIUS (WHEEL_CIRCUMFERENCE / M_PI / 2.0F) //m
+#define WHEEL_TREAD (0.132) //m
 #define DRIVE_VOLTAGE_MAX (6.40F)
 #define DRIVE_VOLTAGE_MIN (1.20F)
 #define DECEL_VOLTAGE (1.80F)
-#define STOP_START (DISTANCE_PER_COUNT * 2.0F)
+#define STOP_START (WHEEL_CIRCUMFERENCE / PULSE_PER_REVOLUTION * 2.0F)
 #define PERIODS_STOPPING (5)
 #define DECEL_START (STOP_START * 3.0F)
 #define MOTOR_NUM (2)
@@ -56,6 +58,7 @@ typedef enum drive_status{
     STATE_REMOTE_DRIVE,
     STATE_REMOTE_DECEL,
     STATE_REMOTE_STOP,
+    STATE_REMOTE_SCAN,
     STATE_LINE_IDLE,
     STATE_LINE_DRIVE,
     STATE_LINE_STOP,
@@ -91,6 +94,9 @@ typedef struct periodic_context {
     float target_voltage;
     int stopping_count;
     t_posctrl_context posctx[2];
+    float speed;
+    float rotspeed;
+    float position[3];
     pthread_mutex_t mutex;
     char linesens;
     int linesens_continuous_cnt;
@@ -280,6 +286,17 @@ static void cmd_connect(struct sockaddr_in *clitSockAddr){
     sendto(sock, (char *)&res, sizeof(t_evrbcar_cmd_response), 0, (struct sockaddr *)&addr, sizeof(addr));
 }
 
+static void cmd_scan(void){
+    float v = (DRIVE_VOLTAGE_MAX - DRIVE_VOLTAGE_MIN) * 0.5F + DRIVE_VOLTAGE_MIN;
+    push_event_log("scan:");
+    pthread_mutex_lock(&prdctx.mutex);
+    if(prdctx.state == STATE_REMOTE_IDLE){
+        prdctx.state = STATE_REMOTE_SCAN; 
+    }
+    prdctx.target_voltage = v;
+    pthread_mutex_unlock(&prdctx.mutex);
+}
+
 static bool udp_routine(evdsptc_event_t* event){
     struct sockaddr_in clitSockAddr;
     int sock = (int)evdsptc_event_getparam(event);
@@ -313,6 +330,9 @@ static bool udp_routine(evdsptc_event_t* event){
        case EVRBCAR_CMD_CONNECT:
            cmd_connect(&clitSockAddr);
            break;
+       case EVRBCAR_CMD_SCAN:
+           cmd_scan();
+           break;
        default:
            break;
        }
@@ -341,13 +361,11 @@ static bool periodic_routine(evdsptc_event_t* event){
     prdctx->prev = now;
     if(interval < prdctx->min) prdctx->min = interval;
     if(interval > prdctx->max) prdctx->max = interval;
-   
-    if(count++ % 64 == 0){
-        evrbcar_imu_measure(&imuctx, euler);
-        evrbcar_tof_measure(&tofctx, &measure);
-        push_event_log("imu = %f, %f, %f, tof = %d", euler[0], euler[1], euler[2], measure);
-    }
 
+    evrbcar_imu_measure(&imuctx, euler);
+    evrbcar_tof_measure(&tofctx, &measure);
+   
+    
     pthread_mutex_lock(&prdctx->mutex);
    
     prdctx->last_linesens = prdctx->linesens;
@@ -366,12 +384,19 @@ static bool periodic_routine(evdsptc_event_t* event){
             prdctx->posctx[i].last_input = input; 
             if(prdctx->posctx[i].voltage >= 0.0F) prdctx->posctx[i].count++;
             else prdctx->posctx[i].count--;
-            if(prdctx->move_remaining > 0.0F && prdctx->move_remaining != FLT_MAX) prdctx->move_remaining -= DISTANCE_PER_COUNT;
+            if(prdctx->move_remaining > 0.0F && prdctx->move_remaining != FLT_MAX) prdctx->move_remaining -= (WHEEL_CIRCUMFERENCE / PULSE_PER_REVOLUTION);
         }
+
         prdctx->posctx[i].speed = 
-            (prdctx->posctx[i].count - prdctx->posctx[i].log[(prdctx->posctx[i].period - PERIODS_SPEED_AVERAGE) % LOG_SIZE].count) * DISTANCE_PER_COUNT / (PERIODS_SPEED_AVERAGE * TICK_SEC);
+            (prdctx->posctx[i].count - prdctx->posctx[i].log[(prdctx->posctx[i].period - 1) % LOG_SIZE].count) / PULSE_PER_REVOLUTION / TICK_SEC * 2.0F * M_PI;
     }   
-    
+
+    prdctx->speed = WHEEL_RADIUS / 2.0F * (prdctx->posctx[0].speed + prdctx->posctx[1].speed); 
+    //prdctx->rotspeed = WHEEL_RADIUS / WHEEL_TREAD * (prdctx->posctx[0].speed - prdctx->posctx[1].speed); 
+    prdctx->position[0] = prdctx->position[0] + prdctx->speed * cos(prdctx->position[2]) * TICK_SEC;
+    prdctx->position[1] = prdctx->position[1] + prdctx->speed * sin(prdctx->position[2]) * TICK_SEC;
+    prdctx->position[2] = euler[2] / 180.0F * M_PI;
+
     if(prdctx->state < STATE_LINE_IDLE){
         if(prdctx->move_remaining > STOP_START * 2.0F) prdctx->state = STATE_REMOTE_DRIVE;
         if(prdctx->state > STATE_REMOTE_IDLE && prdctx->state < STATE_REMOTE_DECEL && prdctx->move_remaining < DECEL_START * 2.0F) prdctx->state = STATE_REMOTE_DECEL;
@@ -424,7 +449,11 @@ static bool periodic_routine(evdsptc_event_t* event){
     }
     
     pthread_mutex_unlock(&prdctx->mutex);
-   
+  
+    if(count++ % 64 == 0){
+        push_event_log("imu = %f, %f, %f, %f, tof = %d", prdctx->position[0], prdctx->position[1], prdctx->position[2], euler[2], measure);
+    }
+ 
     return (bool)finalize;
 }
 
@@ -619,6 +648,11 @@ int main(int argc, char *argv[]){
     prdctx.min = TICK_NS;
     prdctx.linesens = 7;
     prdctx.target_voltage = 0.0F;
+    prdctx.speed = 0.0F;
+    prdctx.rotspeed = 0.0F;
+    prdctx.position[0] = 0.0F;
+    prdctx.position[1] = 0.0F;
+    prdctx.position[2] = 0.0F;
     prdctx.last_linesens = 7;
 
     if(argc > 1 && argv[1] == index(argv[1], '-')){

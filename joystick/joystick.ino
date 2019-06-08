@@ -119,7 +119,7 @@ void loop() {
     int rawY = getMCP3204(1);
 
     request.mode = EVRBCAR_CMD_MOVE_TURN;
-    request.fvalue[0] = convraw2a(rawX);
+    request.fvalue[0] = convraw2a(rawX) * -1.0F;
     request.fvalue[1] = convraw2a(rawY);
     request.ivalue[0] = !digitalRead(SW_PIN);
 

@@ -127,8 +127,8 @@ static void move_forward_to(t_periodic_context* prdctx, float distance){
 static void turn_at_offset(t_periodic_context* prdctx, float voltage_offset){
     int decel_target = 0; 
 
-    if(voltage_offset < 0.0F) decel_target = 1;
-    else decel_target = 0;
+    if(voltage_offset < 0.0F) decel_target = 0;
+    else decel_target = 1;
     prdctx->posctx[decel_target].last_voltage_offset = prdctx->posctx[decel_target].voltage_offset; 
     if(fabs(prdctx->target_voltage) > EPS){  
         prdctx->posctx[decel_target].voltage_offset = fabs(voltage_offset) * -1.0F; 

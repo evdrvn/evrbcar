@@ -43,6 +43,7 @@
 #define MAX_WS_CLIENTS (1)
 #define PERIODS_UDP_TIMEOUT (16)
 #define EPS (0.00001)
+#define SCAN_BUFSIZE (1024)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
@@ -85,6 +86,11 @@ typedef struct posctrl_context {
     drv8830_conn_t conn;
 } t_posctrl_context;
 
+typedef struct scan_data {
+    float angle;
+    int range;
+} t_scan_data;
+
 typedef struct periodic_context {
     long long int max;
     long long int min;
@@ -104,6 +110,9 @@ typedef struct periodic_context {
     char last_linesens;
     int last_linesens_continuous_cnt;
     uint32_t tof;
+    float scan_offset;
+    int scan_stage;
+    t_scan_data scanbuf[SCAN_BUFSIZE];
 } t_periodic_context;
 
 typedef struct ws_client {

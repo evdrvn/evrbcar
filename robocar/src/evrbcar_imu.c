@@ -67,7 +67,7 @@ int evrbcar_imu_init(bno055_conn_t* conn, const char* i2cdev, uint8_t address){
         }
     }
     if(0 > bno055_init(conn, 0x81, params, i + j)) push_event_log("imu init error");
-
+#if 0
     while(ret >= 0 && !(calibstat == 0xFF || calibstat == 0xBF)){
         push_event_log("calibrating... calibstat = 0x%x", calibstat);
         ret = bno055_readcalibstat(conn, &calibstat);
@@ -75,7 +75,7 @@ int evrbcar_imu_init(bno055_conn_t* conn, const char* i2cdev, uint8_t address){
     }
     if(!(calibstat == 0xFF || calibstat == 0xBF)) push_event_log("imu calibration error !! ret = %d, calibstat = 0x%x", ret, calibstat);
     else push_event_log("imu calibration completed !! ret = %d, calibstat = 0x%x", ret, calibstat);
-
+#endif
     return ret;
 }
 

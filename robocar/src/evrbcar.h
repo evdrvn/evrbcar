@@ -1,8 +1,12 @@
 #ifndef __EVRBCAR_H__
 #define __EVRBCAR_H__
 
+#include <math.h>
+
 #define CLIENT_UDP_PORT (65000)
 #define EVRBCAR_UDP_PORT (65001)
+#define DEG2RAD(deg) (deg /180.0F * M_PI)
+#define RAD2DEG(rad) (rad /M_PI * 180.0F)
 
 typedef enum evrbcar_cmd_mode{
     EVRBCAR_CMD_STOP = 0,

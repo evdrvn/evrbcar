@@ -30,6 +30,7 @@
 #define WHEEL_CIRCUMFERENCE (0.215F) //m
 #define WHEEL_RADIUS (WHEEL_CIRCUMFERENCE / M_PI / 2.0F) //m
 #define WHEEL_TREAD (0.132) //m
+#define TOF_MEASURE_OFFSET (30) //mm
 #define DRIVE_VOLTAGE_MAX (6.40F)
 #define DRIVE_VOLTAGE_MIN (1.20F)
 #define DECEL_VOLTAGE (1.80F)
@@ -41,7 +42,7 @@
 #define I2C_DEVNAME "/dev/i2c-1"
 #define MAX_WS_CLIENTS (1)
 #define PERIODS_UDP_TIMEOUT (16)
-#define EPS (0.0001)
+#define EPS (0.00001)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
@@ -102,6 +103,7 @@ typedef struct periodic_context {
     int linesens_continuous_cnt;
     char last_linesens;
     int last_linesens_continuous_cnt;
+    uint32_t tof;
 } t_periodic_context;
 
 typedef struct ws_client {
@@ -119,7 +121,7 @@ static long long int timespec_diff(struct timespec *t1, struct timespec *t2){
 
 static void move_forward_to(t_periodic_context* prdctx, float distance){
     prdctx->move_remaining = distance * 2.0F; 
-    push_event_log(" -> state = %d, remaining = %f", prdctx->state, prdctx->move_remaining);
+    //push_event_log(" -> state = %d, remaining = %f", prdctx->state, prdctx->move_remaining);
 }
 
 static void turn_at_offset(t_periodic_context* prdctx, float voltage_offset){
@@ -135,13 +137,14 @@ static void turn_at_offset(t_periodic_context* prdctx, float voltage_offset){
         prdctx->posctx[decel_target].voltage_offset = fabs(voltage_offset) * -0.5F; 
         prdctx->posctx[!decel_target].voltage_offset = fabs(voltage_offset) * 0.5F; 
     }
-
+#if 0
     if(prdctx->posctx[decel_target].last_voltage_offset != prdctx->posctx[decel_target].voltage_offset){ 
-        push_event_log(" -> voltage_offset = %f {%f, %f}", 
+       push_event_log(" -> voltage_offset = %f {%f, %f}", 
                 voltage_offset, 
                 prdctx->posctx[0].voltage_offset, 
                 prdctx->posctx[1].voltage_offset); 
     }
+#endif
 }
 
 static float get_curve_voltage_offset(float target_voltage, float level){
@@ -209,7 +212,7 @@ static void line_tracing(t_periodic_context* prdctx){
 }
 
 static void cmd_stop(){
-    push_event_log("stop: ");
+    //push_event_log("stop: ");
     pthread_mutex_lock(&prdctx.mutex);
     move_forward_to(&prdctx, 0.0F);
     prdctx.target_voltage = 0.0F;
@@ -218,7 +221,7 @@ static void cmd_stop(){
 
 static void cmd_move_to(float distance){
     float v = DRIVE_VOLTAGE_MAX;
-    push_event_log("move_to: %f", distance);
+    //push_event_log("move_to: %f", distance);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state >= STATE_LINE_IDLE){
         prdctx.state = STATE_REMOTE_IDLE; 
@@ -231,7 +234,7 @@ static void cmd_move_to(float distance){
 }
 
 static void cmd_move_at(float level){
-    push_event_log("move_at: %f", level);
+    //push_event_log("move_at: %f", level);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state >= STATE_LINE_IDLE){
         prdctx.state = STATE_REMOTE_IDLE; 
@@ -261,7 +264,7 @@ static void cmd_line_trace(float level, int linesens){
 }
 
 static void cmd_turn(float level){
-    push_event_log("turn: %f", level);
+    //push_event_log("turn: %f", level);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, level));
     pthread_mutex_unlock(&prdctx.mutex);
@@ -350,23 +353,41 @@ static bool periodic_routine(evdsptc_event_t* event){
     t_periodic_context* prdctx = (struct periodic_context*)evdsptc_event_getparam(event);
     long long int interval = TICK_NS;
     int i, input;
-    float v;
+    float v; 
     static int count;
-    uint32_t measure;
-    double euler[3] = {0};
+    double euler[3];
+    int error;
+    uint32_t tof;
+    static int skip_count = 0;
 
     clock_gettime(CLOCK_REALTIME, &now);
-    if(prdctx->initial) prdctx->initial = false;
+    if(prdctx->initial) {
+        prdctx->initial = false;
+        skip_count = 0;
+    }
     else interval = timespec_diff(&prdctx->prev, &now);
     prdctx->prev = now;
     if(interval < prdctx->min) prdctx->min = interval;
     if(interval > prdctx->max) prdctx->max = interval;
 
-    evrbcar_imu_measure(&imuctx, euler);
-    evrbcar_tof_measure(&tofctx, &measure);
+    error = evrbcar_imu_measure(&imuctx, euler);
+    //euler[2] += 360.0F;
+    evrbcar_tof_measure(&tofctx, &tof);
+    prdctx->tof += TOF_MEASURE_OFFSET;
     
     pthread_mutex_lock(&prdctx->mutex);
-   
+  
+    prdctx->tof = tof;
+
+    /* noise canceling */
+    if((fabs(euler[2] - prdctx->position[2]) > 10.0F && skip_count < 8) || error <= 0){
+        skip_count++;
+        //push_event_log("skip!! %f, %f, %d, %d", euler[2], prdctx->position[2], skip_count, error);
+    }else{
+        skip_count = 0;
+        prdctx->position[2] = euler[2];
+    }
+
     prdctx->last_linesens = prdctx->linesens;
     if(!enable_ext_linesens){
         input = 0; 
@@ -394,7 +415,6 @@ static bool periodic_routine(evdsptc_event_t* event){
     //prdctx->rotspeed = WHEEL_RADIUS / WHEEL_TREAD * (prdctx->posctx[0].speed - prdctx->posctx[1].speed); 
     prdctx->position[0] = prdctx->position[0] + prdctx->speed * cos(prdctx->position[2]) * TICK_SEC;
     prdctx->position[1] = prdctx->position[1] + prdctx->speed * sin(prdctx->position[2]) * TICK_SEC;
-    prdctx->position[2] = euler[2] / 180.0F * M_PI;
 
     if(prdctx->state < STATE_LINE_IDLE){
         if(prdctx->move_remaining > STOP_START * 2.0F) prdctx->state = STATE_REMOTE_DRIVE;
@@ -450,7 +470,8 @@ static bool periodic_routine(evdsptc_event_t* event){
     pthread_mutex_unlock(&prdctx->mutex);
   
     if(count++ % 64 == 0){
-        push_event_log("imu = %f, %f, %f, %f, tof = %d", prdctx->position[0], prdctx->position[1], prdctx->position[2], euler[2], measure);
+        push_event_log("odom = (%f, %f, %f), tof = %d"
+                , prdctx->position[0], prdctx->position[1], prdctx->position[2], prdctx->tof);
     }
  
     return (bool)finalize;

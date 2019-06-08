@@ -18,6 +18,8 @@ int cancel = 0;
 static int evrbcar_imu_save_calibdat(bno055_conn_t* conn){
     int ret = 0;
     
+    bno055_setmode(conn, OPERATION_MODE_CONFIG);
+    sleep(1);
     bno055_readbytes(conn, ACCEL_OFFSET_X_LSB_ADDR, calibdat, sizeof(calibdat));
 
     fp = fopen(EVRBCAR_IMU_CALIBDAT_FILENAME, "wb" );
@@ -64,7 +66,6 @@ int evrbcar_imu_init(bno055_conn_t* conn, const char* i2cdev, uint8_t address){
             params[i + j].value = calibdat[j]; 
         }
     }
-    
     if(0 > bno055_init(conn, 0x81, params, i + j)) push_event_log("imu init error");
 
     while(ret >= 0 && !(calibstat == 0xFF || calibstat == 0xBF)){
@@ -72,30 +73,14 @@ int evrbcar_imu_init(bno055_conn_t* conn, const char* i2cdev, uint8_t address){
         ret = bno055_readcalibstat(conn, &calibstat);
         sleep(1);
     }
-    if(calibstat != 0xFF) push_event_log("imu calibration error !! ret = %d, calibstat = 0x%x", ret, calibstat);
+    if(!(calibstat == 0xFF || calibstat == 0xBF)) push_event_log("imu calibration error !! ret = %d, calibstat = 0x%x", ret, calibstat);
     else push_event_log("imu calibration completed !! ret = %d, calibstat = 0x%x", ret, calibstat);
-
-    ret =  evrbcar_imu_save_calibdat(conn);
 
     return ret;
 }
 
 int evrbcar_imu_measure(bno055_conn_t* conn, double *result){
-    bool noerror;
-    int i = 0;
-    
-    noerror = bno055_readeuler(conn, euler_);
-    
-    /* noise canceling */
-    if( (fabs(euler[0] - euler_[0]) > 90.0 || fabs(euler[1] - euler_[1]) > 90.0 || fabs(euler[2] - euler_[2]) > 90.0) && cancel < 5 && noerror) cancel++;
-    else {
-        for(i = 0; i < 3; i++) {
-            euler[i] = euler_[i];
-            result[i] = euler_[i];
-        }
-        cancel = 0;
-    }
-    return cancel;
+    return bno055_readeuler(conn, result);
 }
 
 int evrbcar_imu_destroy(bno055_conn_t* conn){

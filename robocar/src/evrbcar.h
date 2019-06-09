@@ -5,8 +5,10 @@
 
 #define CLIENT_UDP_PORT (65000)
 #define EVRBCAR_UDP_PORT (65001)
+#define SCAN_UDP_PORT (65002)
 #define DEG2RAD(deg) (deg /180.0F * M_PI)
 #define RAD2DEG(rad) (rad /M_PI * 180.0F)
+#define SCAN_BUFSIZE (256)
 
 typedef enum evrbcar_cmd_mode{
     EVRBCAR_CMD_STOP = 0,
@@ -31,6 +33,13 @@ typedef struct evrbcar_cmd_response {
     int ivalue[2];
     float fvalue[2];
 } t_evrbcar_cmd_response;
+
+typedef struct scan_data {
+    float start_angle;
+    float end_angle;
+    short num;
+    short range[SCAN_BUFSIZE];
+} t_scan_data;
 
 #ifndef __JOYSTICK__
 

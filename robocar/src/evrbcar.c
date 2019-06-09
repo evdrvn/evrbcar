@@ -43,7 +43,6 @@
 #define MAX_WS_CLIENTS (1)
 #define PERIODS_UDP_TIMEOUT (16)
 #define EPS (0.00001)
-#define SCAN_BUFSIZE (1024)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
@@ -86,11 +85,6 @@ typedef struct posctrl_context {
     drv8830_conn_t conn;
 } t_posctrl_context;
 
-typedef struct scan_data {
-    float angle;
-    int range;
-} t_scan_data;
-
 typedef struct periodic_context {
     long long int max;
     long long int min;
@@ -106,13 +100,14 @@ typedef struct periodic_context {
     float position[3];
     pthread_mutex_t mutex;
     char linesens;
-    int linesens_continuous_cnt;
     char last_linesens;
+    int linesens_continuous_cnt;
     int last_linesens_continuous_cnt;
     uint32_t tof;
-    float scan_offset;
+    float scan_angle_offset;
     int scan_stage;
-    t_scan_data scanbuf[SCAN_BUFSIZE];
+    int scan_periods;
+    t_scan_data scanbuf;
 } t_periodic_context;
 
 typedef struct ws_client {
@@ -272,10 +267,14 @@ static void cmd_line_trace(float level, int linesens){
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
-static void cmd_turn(float level){
+static void cmd_turn_impl(float level){
     //push_event_log("turn: %f", level);
-    pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state < STATE_LINE_IDLE) turn_at_offset(&prdctx, get_curve_voltage_offset(prdctx.target_voltage, level));
+}
+
+static void cmd_turn(float level){
+    pthread_mutex_lock(&prdctx.mutex);
+    cmd_turn_impl(level);
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
@@ -299,13 +298,16 @@ static void cmd_connect(struct sockaddr_in *clitSockAddr){
 }
 
 static void cmd_scan(void){
-    float v = (DRIVE_VOLTAGE_MAX - DRIVE_VOLTAGE_MIN) * 0.5F + DRIVE_VOLTAGE_MIN;
     push_event_log("scan:");
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state == STATE_REMOTE_IDLE){
         prdctx.state = STATE_REMOTE_SCAN; 
+        prdctx.target_voltage = 0.0F;
+        prdctx.scan_stage = 1;
+        prdctx.scan_periods = 0;
+        prdctx.scan_angle_offset = prdctx.position[2];
+        prdctx.scanbuf.num = 0;
     }
-    prdctx.target_voltage = v;
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
@@ -380,9 +382,8 @@ static bool periodic_routine(evdsptc_event_t* event){
     if(interval > prdctx->max) prdctx->max = interval;
 
     error = evrbcar_imu_measure(&imuctx, euler);
-    //euler[2] += 360.0F;
     evrbcar_tof_measure(&tofctx, &tof);
-    prdctx->tof += TOF_MEASURE_OFFSET;
+    tof += TOF_MEASURE_OFFSET;
     
     pthread_mutex_lock(&prdctx->mutex);
   
@@ -425,7 +426,42 @@ static bool periodic_routine(evdsptc_event_t* event){
     prdctx->position[0] = prdctx->position[0] + prdctx->speed * cos(prdctx->position[2]) * TICK_SEC;
     prdctx->position[1] = prdctx->position[1] + prdctx->speed * sin(prdctx->position[2]) * TICK_SEC;
 
-    if(prdctx->state < STATE_LINE_IDLE){
+    if(prdctx->state == STATE_REMOTE_SCAN){
+        cmd_turn_impl(0.5F); 
+        float angle = prdctx->position[2] - prdctx->scan_angle_offset;
+        if(angle < 0.0F) angle += 360.0F;
+
+        if(prdctx->scan_periods++ >= SCAN_BUFSIZE) prdctx->scan_stage = -1;
+        
+        if(prdctx->scan_stage == 1){
+            if(angle >= 165.0F){
+                prdctx->scanbuf.start_angle = angle;
+                prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
+                prdctx->scan_stage = 2;
+            }
+        }else if(prdctx->scan_stage == 2){
+            prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
+            push_event_log("scan: num = %d, stage = %d, range = %d", prdctx->scanbuf.num - 1, prdctx->scan_stage, prdctx->scanbuf.range[prdctx->scanbuf.num - 1]);
+            if(angle < 165.0F) prdctx->scan_stage = 3;
+        }else if(prdctx->scan_stage == 3){
+            prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
+            push_event_log("scan: num = %d, stage = %d, range = %d", prdctx->scanbuf.num - 1, prdctx->scan_stage, prdctx->scanbuf.range[prdctx->scanbuf.num - 1]);
+            if(angle >= 195.0F) prdctx->scan_stage = 3;
+        }else if(prdctx->scan_stage == 3){
+            prdctx->scanbuf.end_angle = angle;
+            prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
+            push_event_log("scan: num = %d, stage = %d, range = %d", prdctx->scanbuf.num - 1, prdctx->scan_stage, prdctx->scanbuf.range[prdctx->scanbuf.num - 1]);
+            prdctx->scan_stage = 4;
+        }else if(prdctx->scan_stage == 4){
+            if(angle >= 355.0F){
+                prdctx->scan_stage = 5;
+                prdctx->state = STATE_REMOTE_DECEL;
+            }
+        }else{
+            prdctx->scan_stage = -1;
+            prdctx->state = STATE_REMOTE_DECEL;
+        }
+    }else if(prdctx->state < STATE_LINE_IDLE){
         if(prdctx->move_remaining > STOP_START * 2.0F) prdctx->state = STATE_REMOTE_DRIVE;
         if(prdctx->state > STATE_REMOTE_IDLE && prdctx->state < STATE_REMOTE_DECEL && prdctx->move_remaining < DECEL_START * 2.0F) prdctx->state = STATE_REMOTE_DECEL;
         if(prdctx->state > STATE_REMOTE_IDLE && prdctx->state < STATE_REMOTE_STOP && prdctx->move_remaining < STOP_START * 2.0F){
@@ -438,7 +474,7 @@ static bool periodic_routine(evdsptc_event_t* event){
     }
 
     for(i = 0; i < 2; i++){
-        if(prdctx->state == STATE_REMOTE_DRIVE) prdctx->posctx[i].voltage = prdctx->target_voltage; 
+        if(prdctx->state == STATE_REMOTE_DRIVE || prdctx->state == STATE_REMOTE_SCAN) prdctx->posctx[i].voltage = prdctx->target_voltage; 
         else if(prdctx->state == STATE_REMOTE_DECEL) prdctx->posctx[i].voltage = DECEL_VOLTAGE;
         else if(prdctx->state == STATE_REMOTE_STOP){
             prdctx->posctx[i].voltage = 0.0F;
@@ -634,7 +670,10 @@ static void sockaddr_init (const char *address, unsigned short port, struct sock
     *sockaddr = *((struct sockaddr *)&sockaddr_in);
 }
 
+extern char *optarg;
+extern int optind, opterr, optopt;
 int main(int argc, char *argv[]){
+    int opt;
     struct timespec interval = { interval.tv_sec = 0, interval.tv_nsec = TICK_NS};
     pthread_t th;
     pthread_mutexattr_t mutexattr;
@@ -646,7 +685,9 @@ int main(int argc, char *argv[]){
     int i,j;
     struct mg_context *mgctx;
     bool dump = false;
-    const char *address = "";
+    const char *server_address = "";
+    char *scan_address = NULL;
+    struct sockaddr scanSockAddr;
     unsigned short port = EVRBCAR_UDP_PORT;
     struct sockaddr servSockAddr;
     int server_sock;
@@ -683,14 +724,23 @@ int main(int argc, char *argv[]){
     prdctx.position[1] = 0.0F;
     prdctx.position[2] = 0.0F;
     prdctx.last_linesens = 7;
+    prdctx.scan_stage = 0;
 
-    if(argc > 1 && argv[1] == index(argv[1], '-')){
-        if(NULL != index(argv[1], 'l')){
+    while ((opt = getopt(argc, argv, "lds:")) != -1) {
+        switch (opt) {
+        case 'l':
             push_event_log("line tracing mode");
             cmd_line_trace(1.0F, -1);
-        }
-        if(NULL != index(argv[1], 'd')){
+            break;
+        case 'd':
             dump = true; 
+            break;
+        case 's':
+            scan_address = optarg;
+            sockaddr_init(scan_address, SCAN_UDP_PORT, &scanSockAddr);
+            break;
+        default:
+            break;
         }
     }
 
@@ -719,7 +769,7 @@ int main(int argc, char *argv[]){
     server_sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
     ioctlval = 1;
     ioctl(server_sock, FIONBIO, &ioctlval);
-    sockaddr_init(address, port, &servSockAddr);
+    sockaddr_init(server_address, port, &servSockAddr);
     if (bind(server_sock, &servSockAddr, sizeof(servSockAddr)) < 0) {
         perror("bind() failed.");
         exit(EXIT_FAILURE);

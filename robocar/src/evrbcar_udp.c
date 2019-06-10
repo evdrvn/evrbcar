@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/socket.h>
@@ -61,6 +62,15 @@ int evrbcar_udp_cmd_ext_line_trace(t_evrbcar_udp_context *udpctx, float level, i
     req.fvalue[0] = level;
     req.ivalue[0] = linesens;
     sendSize = sendto(udpctx->sock, &req, size, 0, &udpctx->sockaddr, sizeof(udpctx->sockaddr));
+    if (sendSize != size) return -1;
+    return sendSize;
+}
+
+int evrbcar_udp_send_scan_data(t_evrbcar_udp_context *udpctx, t_scan_data* scan_data, short num){
+    int sendSize;
+    int size = offsetof(t_scan_data, range) - offsetof(t_scan_data, odom) + num * sizeof(short);
+
+    sendSize = sendto(udpctx->sock, scan_data, size, 0, &udpctx->sockaddr, sizeof(udpctx->sockaddr));
     if (sendSize != size) return -1;
     return sendSize;
 }

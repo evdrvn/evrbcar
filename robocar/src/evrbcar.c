@@ -53,6 +53,7 @@ static volatile bool enable_ext_linesens = false;
 static volatile int ext_linesens = 7;
 static bno055_conn_t imuctx;
 static VL53L0X_Dev_t tofctx;
+static t_evrbcar_udp_context scan_udpctx = {0};
  
 typedef enum drive_status{
     STATE_REMOTE_IDLE = 0,
@@ -369,7 +370,7 @@ static bool periodic_routine(evdsptc_event_t* event){
     double euler[3];
     int error;
     uint32_t tof;
-    static int skip_count = 0;
+    static int skip_count;
 
     clock_gettime(CLOCK_REALTIME, &now);
     if(prdctx->initial) {
@@ -388,6 +389,7 @@ static bool periodic_routine(evdsptc_event_t* event){
     pthread_mutex_lock(&prdctx->mutex);
   
     prdctx->tof = tof;
+    prdctx->scanbuf.scan = false;
 
     /* noise canceling */
     if((fabs(euler[2] - prdctx->position[2]) > 10.0F && skip_count < 8) || error <= 0){
@@ -426,6 +428,10 @@ static bool periodic_routine(evdsptc_event_t* event){
     prdctx->position[0] = prdctx->position[0] + prdctx->speed * cos(prdctx->position[2]) * TICK_SEC;
     prdctx->position[1] = prdctx->position[1] + prdctx->speed * sin(prdctx->position[2]) * TICK_SEC;
 
+    prdctx->scanbuf.odom[0] = prdctx->position[0];
+    prdctx->scanbuf.odom[1] = prdctx->position[1];
+    prdctx->scanbuf.odom[2] = prdctx->position[2];
+
     if(prdctx->state == STATE_REMOTE_SCAN){
         cmd_turn_impl(0.5F); 
         float angle = prdctx->position[2] - prdctx->scan_angle_offset;
@@ -455,6 +461,7 @@ static bool periodic_routine(evdsptc_event_t* event){
         }else if(prdctx->scan_stage == 4){
             if(angle >= 355.0F){
                 prdctx->scan_stage = 5;
+                prdctx->scanbuf.scan = true;
                 prdctx->state = STATE_REMOTE_DECEL;
             }
         }else{
@@ -513,7 +520,13 @@ static bool periodic_routine(evdsptc_event_t* event){
     }
     
     pthread_mutex_unlock(&prdctx->mutex);
-  
+ 
+    if(prdctx->scanbuf.scan == false){
+        evrbcar_udp_send_scan_data(&scan_udpctx, &prdctx->scanbuf, 0);
+    }else{
+        evrbcar_udp_send_scan_data(&scan_udpctx, &prdctx->scanbuf, prdctx->scanbuf.num);
+    }
+
     if(count++ % 64 == 0){
         push_event_log("odom = (%f, %f, %f), tof = %d"
                 , prdctx->position[0], prdctx->position[1], prdctx->position[2], prdctx->tof);
@@ -686,8 +699,6 @@ int main(int argc, char *argv[]){
     struct mg_context *mgctx;
     bool dump = false;
     const char *server_address = "";
-    char *scan_address = NULL;
-    struct sockaddr scanSockAddr;
     unsigned short port = EVRBCAR_UDP_PORT;
     struct sockaddr servSockAddr;
     int server_sock;
@@ -736,8 +747,7 @@ int main(int argc, char *argv[]){
             dump = true; 
             break;
         case 's':
-            scan_address = optarg;
-            sockaddr_init(scan_address, SCAN_UDP_PORT, &scanSockAddr);
+            evrbcar_udp_init(&scan_udpctx, optarg, SCAN_UDP_PORT);
             break;
         default:
             break;

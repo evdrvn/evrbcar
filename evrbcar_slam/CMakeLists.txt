@@ -196,3 +196,6 @@ include_directories(
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+add_executable(evrbcar_scan_pub src/evrbcar_scan_pub.cpp)
+target_link_libraries(evrbcar_scan_pub ${catkin_LIBRARIES})

@@ -16,7 +16,6 @@
 #include <civetweb.h>
 #include <bno055-i2c.h>
 #include <vl53l0x_api.h>
-#include <vl53l0x_api.h>
 
 #include "evrbcar.h"
 #include "evrbcar_elog.h"
@@ -658,29 +657,6 @@ static void WebSocketCloseHandler(const struct mg_connection *conn, void *cbdata
 static void signal_handler(int signum) {
     (void)signum;
     finalize = true;
-}
-
-static void sockaddr_init (const char *address, unsigned short port, struct sockaddr *sockaddr) {
-
-    struct sockaddr_in sockaddr_in;
-    sockaddr_in.sin_family = AF_INET;
-
-    if (inet_aton(address, &sockaddr_in.sin_addr) == 0) {
-        if (strcmp(address, "") == 0 ) {
-            sockaddr_in.sin_addr.s_addr = htonl(INADDR_ANY);
-        } else {
-            fprintf(stderr, "Invalid IP Address.\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    if (port == 0) {
-        fprintf(stderr, "invalid port number.\n");
-        exit(EXIT_FAILURE);
-    }
-    sockaddr_in.sin_port = htons(port);
-
-    *sockaddr = *((struct sockaddr *)&sockaddr_in);
 }
 
 extern char *optarg;

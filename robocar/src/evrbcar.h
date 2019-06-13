@@ -58,5 +58,28 @@ int evrbcar_udp_cmd_line_trace(t_evrbcar_udp_context *udpctx, float level);
 int evrbcar_udp_cmd_ext_line_trace(t_evrbcar_udp_context *udpctx, float level, int linesens);
 int evrbcar_udp_send_scan_data(t_evrbcar_udp_context *udpctx, t_scan_data* scan_data, short num);
 
+inline static void sockaddr_init (const char *address, unsigned short port, struct sockaddr *sockaddr) {
+
+    struct sockaddr_in sockaddr_in;
+    sockaddr_in.sin_family = AF_INET;
+
+    if (inet_aton(address, &sockaddr_in.sin_addr) == 0) {
+        if (strcmp(address, "") == 0 ) {
+            sockaddr_in.sin_addr.s_addr = htonl(INADDR_ANY);
+        } else {
+            fprintf(stderr, "Invalid IP Address.\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (port == 0) {
+        fprintf(stderr, "invalid port number.\n");
+        exit(EXIT_FAILURE);
+    }
+    sockaddr_in.sin_port = htons(port);
+
+    *sockaddr = *((struct sockaddr *)&sockaddr_in);
+}
+
 #endif
 #endif

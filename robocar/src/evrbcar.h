@@ -2,7 +2,12 @@
 #define __EVRBCAR_H__
 
 #include <stdbool.h>
+#include <string.h>
 #include <math.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define CLIENT_UDP_PORT (65000)
 #define EVRBCAR_UDP_PORT (65001)

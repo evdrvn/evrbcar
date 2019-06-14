@@ -38,7 +38,7 @@ $(TARGET): $(OBJECTS) $(LIBS)
 	$(COMPILER) -o $@ $^ $(LDFLAGS)
 
 $(UDPLIB): $(SRCDIR)/$(TARGET)_udp.c
-	$(COMPILER) $(CFLAGS) -I$(SRCDIR) -o $(SRCDIR)/udp.o -c $<
+	$(COMPILER) $(CFLAGS) -I$(SRCDIR) -I$(EVDSPDIR)/src -o $(SRCDIR)/udp.o -c $<
 	$(ARCHIVER) $(ARFLAGS) -o $@ $(SRCDIR)/udp.o
 
 $(OBJDIR)/%.o: $(SRCDIR)/%.c

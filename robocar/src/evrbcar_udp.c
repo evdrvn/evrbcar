@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include "evrbcar.h"
+#include "evrbcar_elog.h"
 
 static void alarm_handler (int ignored) {
     (void)ignored;

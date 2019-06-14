@@ -41,7 +41,7 @@
 #define I2C_DEVNAME "/dev/i2c-1"
 #define MAX_WS_CLIENTS (1)
 #define PERIODS_UDP_TIMEOUT (16)
-#define EPS (0.00001)
+#define EPS (0.00001F)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
@@ -298,7 +298,7 @@ static void cmd_connect(struct sockaddr_in *clitSockAddr){
 }
 
 static void cmd_scan(void){
-    push_event_log("scan:");
+    push_event_log("scan: state = %d", prdctx.state);
     pthread_mutex_lock(&prdctx.mutex);
     if(prdctx.state == STATE_REMOTE_IDLE){
         prdctx.state = STATE_REMOTE_SCAN; 
@@ -307,6 +307,7 @@ static void cmd_scan(void){
         prdctx.scan_periods = 0;
         prdctx.scan_angle_offset = prdctx.position[2];
         prdctx.scanbuf.num = 0;
+        push_event_log("scan: started, state = %d, stage = %d", prdctx.state, prdctx.scan_stage);
     }
     pthread_mutex_unlock(&prdctx.mutex);
 }
@@ -424,8 +425,8 @@ static bool periodic_routine(evdsptc_event_t* event){
 
     prdctx->speed = WHEEL_RADIUS / 2.0F * (prdctx->posctx[0].speed + prdctx->posctx[1].speed); 
     //prdctx->rotspeed = WHEEL_RADIUS / WHEEL_TREAD * (prdctx->posctx[0].speed - prdctx->posctx[1].speed); 
-    prdctx->position[0] = prdctx->position[0] + prdctx->speed * cos(prdctx->position[2]) * TICK_SEC;
-    prdctx->position[1] = prdctx->position[1] + prdctx->speed * sin(prdctx->position[2]) * TICK_SEC;
+    prdctx->position[0] = prdctx->position[0] + prdctx->speed * cos(DEG2RAD(prdctx->position[2])) * TICK_SEC;
+    prdctx->position[1] = prdctx->position[1] + prdctx->speed * sin(DEG2RAD(prdctx->position[2])) * TICK_SEC;
 
     prdctx->scanbuf.odom[0] = prdctx->position[0];
     prdctx->scanbuf.odom[1] = prdctx->position[1];
@@ -461,14 +462,16 @@ static bool periodic_routine(evdsptc_event_t* event){
             if(angle >= 355.0F){
                 prdctx->scan_stage = 5;
                 prdctx->scanbuf.scan = true;
-                prdctx->state = STATE_REMOTE_DECEL;
+                prdctx->state = STATE_REMOTE_STOP;
             }
         }else{
             prdctx->scan_stage = -1;
-            prdctx->state = STATE_REMOTE_DECEL;
+            prdctx->state = STATE_REMOTE_STOP;
         }
     }else if(prdctx->state < STATE_LINE_IDLE){
+        //push_event_log("state = %d, voltage = %f", prdctx->state, prdctx->target_voltage);
         if(prdctx->move_remaining > STOP_START * 2.0F) prdctx->state = STATE_REMOTE_DRIVE;
+        if(prdctx->state == STATE_REMOTE_DRIVE && fabs(prdctx->target_voltage) < EPS) prdctx->state = STATE_REMOTE_STOP;
         if(prdctx->state > STATE_REMOTE_IDLE && prdctx->state < STATE_REMOTE_DECEL && prdctx->move_remaining < DECEL_START * 2.0F) prdctx->state = STATE_REMOTE_DECEL;
         if(prdctx->state > STATE_REMOTE_IDLE && prdctx->state < STATE_REMOTE_STOP && prdctx->move_remaining < STOP_START * 2.0F){
             prdctx->state = STATE_REMOTE_STOP;
@@ -482,7 +485,7 @@ static bool periodic_routine(evdsptc_event_t* event){
     for(i = 0; i < 2; i++){
         if(prdctx->state == STATE_REMOTE_DRIVE || prdctx->state == STATE_REMOTE_SCAN) prdctx->posctx[i].voltage = prdctx->target_voltage; 
         else if(prdctx->state == STATE_REMOTE_DECEL) prdctx->posctx[i].voltage = DECEL_VOLTAGE;
-        else if(prdctx->state == STATE_REMOTE_STOP){
+        else if(prdctx->state == STATE_REMOTE_STOP || prdctx->state == STATE_REMOTE_IDLE){
             prdctx->posctx[i].voltage = 0.0F;
             turn_at_offset(prdctx, 0.0F);
         }
@@ -723,6 +726,7 @@ int main(int argc, char *argv[]){
             dump = true; 
             break;
         case 's':
+            push_event_log("laser scan mode");
             evrbcar_udp_init(&scan_udpctx, optarg, SCAN_UDP_PORT);
             break;
         default:

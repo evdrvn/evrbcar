@@ -5,9 +5,8 @@
 #include <evdsptc.h>
 #include <evrbcar.h>
 
-#define LOG_SIZE (1024)
-#define RING_BUFFER_SIZE (32)
-#define EVENT_LOG_LENGTH (128)
+#define ELOG_BUFSIZE (64)
+#define ELOG_LINELEN (128)
 
 extern bool print_event_log(evdsptc_event_t* event);
 extern void push_event_log(const char *fmt, ...);

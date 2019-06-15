@@ -1,6 +1,6 @@
 #include "evrbcar_elog.h"
 
-static char EVENT_LOG_BUFFER[RING_BUFFER_SIZE][64];
+static char EVENT_LOG_BUFFER[ELOG_BUFSIZE][ELOG_LINELEN];
 static volatile unsigned int event_log_index = 0;
 static pthread_mutex_t elogmtx;
 static evdsptc_context_t elogth;
@@ -17,12 +17,12 @@ void push_event_log(const char *fmt, ...){
     evdsptc_event_t *ev; 
 
     pthread_mutex_lock(&elogmtx);
-    index = event_log_index % RING_BUFFER_SIZE;
+    index = event_log_index % ELOG_BUFSIZE;
     event_log_index++;
     pthread_mutex_unlock(&elogmtx);
     
     va_start(ap, fmt);
-    vsnprintf(EVENT_LOG_BUFFER[index], EVENT_LOG_LENGTH - 1, fmt, ap);
+    vsnprintf(EVENT_LOG_BUFFER[index], ELOG_LINELEN - 1, fmt, ap);
     va_end(ap);
 
     ev = malloc(sizeof(evdsptc_event_t));

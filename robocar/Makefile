@@ -25,7 +25,7 @@ OBJECTS   = $(addprefix $(OBJDIR)/, $(notdir $(SOURCES:.c=.o)))
 DEPENDS   = $(OBJECTS:.o=.d)
 
 .PHONY: all
-all: clean $(TARGET) $(UDPLIB)
+all: $(TARGET) $(UDPLIB)
 
 .PHONY: clean
 clean:

@@ -41,7 +41,7 @@
 #define I2C_DEVNAME "/dev/i2c-1"
 #define MAX_WS_CLIENTS (1)
 #define PERIODS_UDP_TIMEOUT (16)
-#define EPS (0.001F)
+#define EPS (0.00001F)
 #define LOG_SIZE (1024)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
@@ -99,6 +99,7 @@ typedef struct periodic_context {
     float speed;
     float rotspeed;
     float position[3];
+    float delta_yaw;
     pthread_mutex_t mutex;
     char linesens;
     char last_linesens;
@@ -221,34 +222,41 @@ static void line_tracing(t_periodic_context* prdctx){
 static void cmd_stop(){
     //push_event_log("stop: ");
     pthread_mutex_lock(&prdctx.mutex);
-    move_forward_to(&prdctx, 0.0F);
-    prdctx.target_voltage = 0.0F;
-    pthread_mutex_unlock(&prdctx.mutex);
+    if(prdctx.state < STATE_REMOTE_SCAN){
+        move_forward_to(&prdctx, 0.0F);
+        prdctx.target_voltage = 0.0F;
+
+        pthread_mutex_unlock(&prdctx.mutex);
+    }
 }
 
 static void cmd_move_to(float distance){
     float v = DRIVE_VOLTAGE_MAX;
     //push_event_log("move_to: %f", distance);
     pthread_mutex_lock(&prdctx.mutex);
-    if(prdctx.state >= STATE_LINE_IDLE){
-        prdctx.state = STATE_REMOTE_IDLE; 
-        turn_at_offset(&prdctx, 0.0F);
-    }
-    if(distance < 0.0F) v = v * -1.0F;
-    prdctx.target_voltage = v;
-    move_forward_to(&prdctx, distance);
+    if(prdctx.state < STATE_REMOTE_SCAN){
+        if(prdctx.state >= STATE_LINE_IDLE){
+            prdctx.state = STATE_REMOTE_IDLE; 
+            turn_at_offset(&prdctx, 0.0F);
+        }
+        if(distance < 0.0F) v = v * -1.0F;
+        prdctx.target_voltage = v;
+        move_forward_to(&prdctx, distance);
+    } 
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
 static void cmd_move_at(float level){
     //push_event_log("move_at: %f", level);
     pthread_mutex_lock(&prdctx.mutex);
-    if(prdctx.state >= STATE_LINE_IDLE){
-        prdctx.state = STATE_REMOTE_IDLE; 
-        turn_at_offset(&prdctx, 0.0F);
+    if(prdctx.state < STATE_REMOTE_SCAN){
+        if(prdctx.state >= STATE_LINE_IDLE){
+            prdctx.state = STATE_REMOTE_IDLE; 
+            turn_at_offset(&prdctx, 0.0F);
+        }
+        move_forward_to(&prdctx, FLT_MAX);
+        prdctx.target_voltage = get_drive_voltage(level);
     }
-    move_forward_to(&prdctx, FLT_MAX);
-    prdctx.target_voltage = get_drive_voltage(level);
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
@@ -277,7 +285,7 @@ static void cmd_turn_impl(float level){
 
 static void cmd_turn(float level){
     pthread_mutex_lock(&prdctx.mutex);
-    cmd_turn_impl(level);
+    if(prdctx.state < STATE_REMOTE_SCAN) cmd_turn_impl(level);
     pthread_mutex_unlock(&prdctx.mutex);
 }
 
@@ -311,6 +319,7 @@ static void cmd_scan(void){
         prdctx.scanbuf.num = 0;
         prdctx.scan_revolution = 0;
         prdctx.scan_angle_prev= 0.0F;
+        prdctx.delta_yaw = 0.0F;
         push_event_log("scan: started, state = %d, stage = %d", prdctx.state, prdctx.scan_stage);
     }
     pthread_mutex_unlock(&prdctx.mutex);
@@ -394,13 +403,21 @@ static bool periodic_routine(evdsptc_event_t* event){
   
     prdctx->tof = tof;
     prdctx->scanbuf.scan = false;
-
     /* noise canceling */
-    if((fabs(euler[2] - prdctx->position[2]) > 10.0F && skip_count < 8) || error <= 0){
-        skip_count++;
-        //push_event_log("skip!! %f, %f, %d, %d", euler[2], prdctx->position[2], skip_count, error);
+    if(error <= 0) prdctx->scan_stage = 5;
+    else if(fabs(euler[2] - prdctx->position[2]) > 10.0F){
+        if(skip_count >= 8){
+            prdctx->scan_stage = 5; 
+            skip_count = 0;
+            prdctx->position[2] = euler[2];
+        }else{
+            skip_count++;
+            prdctx->position[2] += prdctx->delta_yaw; 
+            //push_event_log("skip!! %f, %f, %d, %d", euler[2], prdctx->position[2], skip_count, error);
+        }
     }else{
         skip_count = 0;
+        prdctx->delta_yaw = prdctx->delta_yaw * 0.8F +  (euler[2] - prdctx->position[2]) * 0.2F;
         prdctx->position[2] = euler[2];
     }
 
@@ -429,15 +446,17 @@ static bool periodic_routine(evdsptc_event_t* event){
 
     prdctx->speed = WHEEL_RADIUS / 2.0F * (prdctx->posctx[0].speed + prdctx->posctx[1].speed); 
     //prdctx->rotspeed = WHEEL_RADIUS / WHEEL_TREAD * (prdctx->posctx[0].speed - prdctx->posctx[1].speed); 
-    prdctx->position[0] = prdctx->position[0] + prdctx->speed * cos(DEG2RAD(prdctx->position[2])) * TICK_SEC;
-    prdctx->position[1] = prdctx->position[1] + prdctx->speed * sin(DEG2RAD(prdctx->position[2])) * TICK_SEC;
-
-    prdctx->scanbuf.odom[0] = prdctx->position[0];
-    prdctx->scanbuf.odom[1] = prdctx->position[1];
-    prdctx->scanbuf.odom[2] = prdctx->position[2];
-
+    if(fabs(prdctx->target_voltage) > EPS){
+        prdctx->position[0] = prdctx->position[0] + prdctx->speed * cos(DEG2RAD(prdctx->position[2])) * TICK_SEC;
+        prdctx->position[1] = prdctx->position[1] + prdctx->speed * sin(DEG2RAD(prdctx->position[2])) * TICK_SEC;
+    }
     if(prdctx->state == STATE_REMOTE_SCAN){
         if(prdctx->scan_stage == 1){
+            skip_count = 0;
+            prdctx->scanbuf.odom[0] = prdctx->position[0];
+            prdctx->scanbuf.odom[1] = prdctx->position[1];
+            prdctx->scanbuf.odom[2] = prdctx->position[2];
+
             prdctx->scan_angle_offset = prdctx->position[2];
             if(prdctx->scan_angle_offset < 0.0F) prdctx->scan_angle_offset += 360.0F;
             prdctx->scan_stage = 2;
@@ -445,10 +464,10 @@ static bool periodic_routine(evdsptc_event_t* event){
 
         cmd_turn_impl(0.5F); 
         
-        float angle = prdctx->position[2] - prdctx->scan_angle_offset;
-        if(prdctx->position[2] < 0.0F) angle += 360.0F;
+        float angle = prdctx->position[2];
+        if(angle < -EPS) angle += 360.0F;
+        angle -= prdctx->scan_angle_offset;
         if(prdctx->scan_stage > 2 && angle <= 0.0F) angle += 360.0F;
-        angle += prdctx->scan_revolution * 360.0F;
         
         int angle_normalized_prev = ((int)prdctx->scan_angle_prev) % 360;
         int angle_normalized = ((int)angle) % 360;
@@ -456,7 +475,9 @@ static bool periodic_routine(evdsptc_event_t* event){
         if( angle_normalized_prev > 270 && angle_normalized < 90){
             prdctx->scan_revolution++; 
         }
-        //push_event_log("rev = %d, angle = %f, %f, %f", prdctx->scan_revolution, angle, prdctx->position[2], prdctx->scan_angle_offset);
+        angle += prdctx->scan_revolution * 360.0F;
+        
+        push_event_log("stage = %d, rev = %d, angle = %f, %f, %f", prdctx->scan_stage, prdctx->scan_revolution, angle, prdctx->position[2], prdctx->scan_angle_offset);
         prdctx->scan_angle_prev = angle;
 
         if(prdctx->scan_periods++ >= SCAN_BUFSIZE) prdctx->scan_stage = -1;
@@ -472,17 +493,17 @@ static bool periodic_routine(evdsptc_event_t* event){
         }else if(prdctx->scan_stage == 3){
             prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
             //push_event_log("scan: num = %d, stage = %d, angle = %f, range = %d", prdctx->scanbuf.num - 1, prdctx->scan_stage, angle, prdctx->scanbuf.range[prdctx->scanbuf.num - 1]);
-            if(angle >= 425.0F) prdctx->scan_stage = 4;
+            if(angle >= 555.0F) prdctx->scan_stage = 4;
         }else if(prdctx->scan_stage == 4){
             prdctx->scanbuf.end_angle = angle;
             prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
             //push_event_log("scan: num = %d, stage = %d, angle = %f, range = %d", prdctx->scanbuf.num - 1, prdctx->scan_stage, angle, prdctx->scanbuf.range[prdctx->scanbuf.num - 1]);
             prdctx->scan_stage = 5;
             prdctx->scan_periods = 0;
+            prdctx->scanbuf.scan = true;
         }else if(prdctx->scan_stage == 5){
             if(angle >= 715.0F){
                 prdctx->scan_stage = 6;
-                prdctx->scanbuf.scan = true;
                 prdctx->state = STATE_REMOTE_STOP;
             }
         }else{
@@ -544,9 +565,13 @@ static bool periodic_routine(evdsptc_event_t* event){
     if(prdctx->scanbuf.scan){
         evrbcar_udp_send_scan_data(&scan_udpctx, &prdctx->scanbuf, prdctx->scanbuf.num);
     }else if(prdctx->state != STATE_REMOTE_SCAN && count++ % 64 == 0){
+        prdctx->scanbuf.odom[0] = prdctx->position[0];
+        prdctx->scanbuf.odom[1] = prdctx->position[1];
+        prdctx->scanbuf.odom[2] = prdctx->position[2];
+
         evrbcar_udp_send_scan_data(&scan_udpctx, &prdctx->scanbuf, 0);
-        push_event_log("odom = (%f, %f, %f), tof = %d"
-                , prdctx->position[0], prdctx->position[1], prdctx->position[2], prdctx->tof);
+        //push_event_log("odom = (%f, %f, %f), tof = %d"
+        //        , prdctx->position[0], prdctx->position[1], prdctx->position[2], prdctx->tof);
     }
      
     pthread_mutex_unlock(&prdctx->mutex);

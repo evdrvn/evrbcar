@@ -103,9 +103,10 @@ float convraw2a(int raw){
         fvalue = fvalue * sign;
     }
 
-    if(fvalue < 0.035) fvalue = 0.0F;
-    else if(fvalue < 0.5) fvalue = 0.33F;
-    else if(fvalue < 0.95) fvalue = 0.67F;
+    if(fvalue < 0.2) fvalue = 0.0F;
+    else if(fvalue < 0.4) fvalue = 0.2F;
+    else if(fvalue < 0.7) fvalue = 0.4F;
+    else if(fvalue < 0.99) fvalue = 0.7F;
     else fvalue = 1.0F;
 
     return sign * fvalue;

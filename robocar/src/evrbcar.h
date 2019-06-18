@@ -4,10 +4,6 @@
 #include <stdbool.h>
 #include <string.h>
 #include <math.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 
 #define CLIENT_UDP_PORT (65000)
 #define EVRBCAR_UDP_PORT (65001)
@@ -51,7 +47,10 @@ typedef struct scan_data {
 
 #ifndef __JOYSTICK__
 
+#include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 typedef struct evrbcar_udp_context {
     int sock;

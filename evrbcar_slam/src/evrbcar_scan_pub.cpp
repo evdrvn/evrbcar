@@ -38,7 +38,7 @@ int main(int argc, char **argv){
         exit(EXIT_FAILURE);
     }
 
-    ros::Publisher scan_pub = nh.advertise<sensor_msgs::LaserScan>("base_scan", 1000);
+    ros::Publisher scan_pub = nh.advertise<sensor_msgs::LaserScan>("/base_scan", 1000);
 
     while(nh.ok()){
         struct sockaddr_in clitSockAddr;
@@ -48,12 +48,19 @@ int main(int argc, char **argv){
         int i= 0;
 
         current_time = ros::Time::now();
-
+#if 1
         if (0 < recvfrom(server_sock, buffer, BUFSIZ, 0, (struct sockaddr *)&clitSockAddr, &sockaddrLen)){
-            odom_x = DEG2RAD(scandat->odom[0]);
-            odom_y = DEG2RAD(scandat->odom[1]);
+            ROS_DEBUG("base_link: %f, %f, %f", scandat->odom[0], scandat->odom[1], scandat->odom[2]);
+            odom_x = scandat->odom[0];
+            odom_y = scandat->odom[1];
             odom_th= DEG2RAD(scandat->odom[2]);
-
+#else
+            seq++;
+            if (seq % 32 == 0){
+            odom_x = 0.0;
+            odom_y = 0.0;
+            odom_th= seq;
+#endif
             geometry_msgs::TransformStamped odom_trans;
             odom_trans.header.stamp = current_time;
             odom_trans.header.frame_id = "odom";
@@ -66,19 +73,39 @@ int main(int argc, char **argv){
             odom_trans.transform.rotation = odom_quat;
             odom_broadcaster.sendTransform(odom_trans);
 
+#if 1
             if(scandat->scan){
+#else
+        if (seq % 32 == 0){
+#endif
                 sensor_msgs::LaserScan msg;
-                msg.ranges.resize(scandat->num);
-                
+
                 msg.header.seq = seq++;
                 msg.header.stamp = current_time;
                 msg.header.frame_id = "base_link";
+#if 0
+                msg.angle_min = DEG2RAD(180);
+                msg.angle_max = DEG2RAD(240);
+                msg.angle_increment = DEG2RAD(6);
+                msg.range_min = 0.2;
+                msg.range_max = 2.0;
+                msg.ranges.resize(11);
+                for(i = 0; i < 11; i++){
+                    msg.ranges[i] = 1.0; 
+                }
+#else 
                 msg.angle_min = DEG2RAD(scandat->start_angle);
                 msg.angle_max = DEG2RAD(scandat->end_angle);
-                msg.angle_increment = DEG2RAD((scandat->end_angle + 360.0F - scandat->start_angle) / (scandat->num - 1));
+                msg.angle_increment = DEG2RAD((scandat->end_angle - scandat->start_angle) / (scandat->num - 1));
+                msg.range_min = 0.2F;
+                msg.range_max = 2.0F;
+                msg.ranges.resize(scandat->num);
                 for(i = 0; i < scandat->num; i++){
-                    msg.ranges[i] = scandat->range[i]; 
+                    msg.ranges[i] = scandat->range[i] / 1000.0F; 
+                    ROS_INFO("base_scan: ranges[%d] = %f", i, msg.ranges[i]);
                 }
+                ROS_INFO("base_scan: from %f to %f total %d inc %f", scandat->start_angle, scandat->end_angle, scandat->num, msg.angle_increment);
+#endif
                 scan_pub.publish(msg);
             }
         } 

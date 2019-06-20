@@ -99,7 +99,7 @@ typedef struct periodic_context {
     float speed;
     float rotspeed;
     float position[3];
-    float delta_yaw;
+    float delta_yaw_lpf;
     pthread_mutex_t mutex;
     char linesens;
     char last_linesens;
@@ -319,7 +319,7 @@ static void cmd_scan(void){
         prdctx.scanbuf.num = 0;
         prdctx.scan_revolution = 0;
         prdctx.scan_angle_prev= 0.0F;
-        prdctx.delta_yaw = 0.0F;
+        prdctx.delta_yaw_lpf = 0.0F;
         push_event_log("scan: started, state = %d, stage = %d", prdctx.state, prdctx.scan_stage);
     }
     pthread_mutex_unlock(&prdctx.mutex);
@@ -384,10 +384,12 @@ static bool periodic_routine(evdsptc_event_t* event){
     int error;
     uint32_t tof;
     static int skip_count;
+    float delta_yaw;
 
     clock_gettime(CLOCK_REALTIME, &now);
     if(prdctx->initial) {
         prdctx->initial = false;
+        count = 0;
         skip_count = 0;
     }
     else interval = timespec_diff(&prdctx->prev, &now);
@@ -403,21 +405,26 @@ static bool periodic_routine(evdsptc_event_t* event){
   
     prdctx->tof = tof;
     prdctx->scanbuf.scan = false;
+   
     /* noise canceling */
+    delta_yaw = euler[2] - prdctx->position[2];
+    if(delta_yaw < -180.0F) delta_yaw += 360.0F;
+    if(delta_yaw >  180.0F) delta_yaw -= 360.0F;
+
     if(error <= 0) prdctx->scan_stage = 5;
-    else if(fabs(euler[2] - prdctx->position[2]) > 10.0F){
+    else if(fabs(delta_yaw) > 10.0F){
         if(skip_count >= 8){
             prdctx->scan_stage = 5; 
             skip_count = 0;
             prdctx->position[2] = euler[2];
         }else{
             skip_count++;
-            prdctx->position[2] += prdctx->delta_yaw; 
+            prdctx->position[2] += prdctx->delta_yaw_lpf; 
             //push_event_log("skip!! %f, %f, %d, %d", euler[2], prdctx->position[2], skip_count, error);
         }
     }else{
         skip_count = 0;
-        prdctx->delta_yaw = prdctx->delta_yaw * 0.8F +  (euler[2] - prdctx->position[2]) * 0.2F;
+        prdctx->delta_yaw_lpf = prdctx->delta_yaw_lpf * 0.8F + delta_yaw * 0.2F;
         prdctx->position[2] = euler[2];
     }
 
@@ -458,7 +465,7 @@ static bool periodic_routine(evdsptc_event_t* event){
             prdctx->scanbuf.odom[2] = prdctx->position[2];
 
             prdctx->scan_angle_offset = prdctx->position[2];
-            if(prdctx->scan_angle_offset < 0.0F) prdctx->scan_angle_offset += 360.0F;
+            if(prdctx->scan_angle_offset < -EPS) prdctx->scan_angle_offset += 360.0F;
             prdctx->scan_stage = 2;
         }
 
@@ -467,17 +474,22 @@ static bool periodic_routine(evdsptc_event_t* event){
         float angle = prdctx->position[2];
         if(angle < -EPS) angle += 360.0F;
         angle -= prdctx->scan_angle_offset;
-        if(prdctx->scan_stage > 2 && angle <= 0.0F) angle += 360.0F;
+        if(prdctx->scan_stage > 2 && angle < -EPS) angle += 360.0F;
         
         int angle_normalized_prev = ((int)prdctx->scan_angle_prev) % 360;
         int angle_normalized = ((int)angle) % 360;
-        
-        if( angle_normalized_prev > 270 && angle_normalized < 90){
+        if(angle_normalized < 0) angle_normalized += 360;
+
+        if(prdctx->scan_stage > 2 && angle_normalized_prev > 240 && angle_normalized < 120){
             prdctx->scan_revolution++; 
         }
         angle += prdctx->scan_revolution * 360.0F;
-        
-        push_event_log("stage = %d, rev = %d, angle = %f, %f, %f", prdctx->scan_stage, prdctx->scan_revolution, angle, prdctx->position[2], prdctx->scan_angle_offset);
+        push_event_log("stage = %d, rev = %d, angle = %f, %d, %d, %f, %f" , prdctx->scan_stage , prdctx->scan_revolution, 
+                angle, 
+                angle_normalized, 
+                angle_normalized_prev, 
+                prdctx->position[2], 
+                prdctx->scan_angle_offset);
         prdctx->scan_angle_prev = angle;
 
         if(prdctx->scan_periods++ >= SCAN_BUFSIZE) prdctx->scan_stage = -1;

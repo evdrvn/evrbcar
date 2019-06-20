@@ -385,6 +385,7 @@ static bool periodic_routine(evdsptc_event_t* event){
     uint32_t tof;
     static int skip_count;
     float delta_yaw;
+    static bool nextrev;
 
     clock_gettime(CLOCK_REALTIME, &now);
     if(prdctx->initial) {
@@ -465,31 +466,46 @@ static bool periodic_routine(evdsptc_event_t* event){
             prdctx->scanbuf.odom[2] = prdctx->position[2];
 
             prdctx->scan_angle_offset = prdctx->position[2];
-            if(prdctx->scan_angle_offset < -EPS) prdctx->scan_angle_offset += 360.0F;
+            //if(prdctx->scan_angle_offset < -EPS) prdctx->scan_angle_offset += 360.0F;
             prdctx->scan_stage = 2;
+            nextrev = false;
         }
 
         cmd_turn_impl(0.5F); 
         
-        float angle = prdctx->position[2];
-        if(angle < -EPS) angle += 360.0F;
-        angle -= prdctx->scan_angle_offset;
-        if(prdctx->scan_stage > 2 && angle < -EPS) angle += 360.0F;
-        
+        float angle = prdctx->position[2] - prdctx->scan_angle_offset;
+        if(
+                (prdctx->scan_stage > 2 && prdctx->position[2] < prdctx->scan_angle_offset)||
+                (prdctx->scan_stage ==2 && angle < -180.0F)
+          ) {
+            if(angle >= 0.0F) angle = 360.0F - angle;
+            else angle += 360.0F;
+        }
+        //if(prdctx->scan_stage > 2 && angle < -EPS) angle += 360.0F;
+
         int angle_normalized_prev = ((int)prdctx->scan_angle_prev) % 360;
         int angle_normalized = ((int)angle) % 360;
-        if(angle_normalized < 0) angle_normalized += 360;
+        //if(angle_normalized < 0) angle_normalized += 360;
 
-        if(prdctx->scan_stage > 2 && angle_normalized_prev > 240 && angle_normalized < 120){
-            prdctx->scan_revolution++; 
+        if(prdctx->scan_stage > 2){
+            if(nextrev && angle_normalized_prev > 240 && angle_normalized < 120){
+                nextrev = false; 
+                prdctx->scan_revolution++; 
+            }else if(angle_normalized_prev > 0 && angle_normalized <= 120){
+                nextrev = true;
+            }
         }
         angle += prdctx->scan_revolution * 360.0F;
-        push_event_log("stage = %d, rev = %d, angle = %f, %d, %d, %f, %f" , prdctx->scan_stage , prdctx->scan_revolution, 
+        push_event_log("stage = %d, rev = %d, angle = %f, %d, %d, %f, %f, dy = %f, %f, %d" , prdctx->scan_stage , prdctx->scan_revolution, 
                 angle, 
                 angle_normalized, 
                 angle_normalized_prev, 
                 prdctx->position[2], 
-                prdctx->scan_angle_offset);
+                prdctx->scan_angle_offset, 
+                delta_yaw,
+                prdctx->delta_yaw_lpf,
+                skip_count 
+                );
         prdctx->scan_angle_prev = angle;
 
         if(prdctx->scan_periods++ >= SCAN_BUFSIZE) prdctx->scan_stage = -1;

@@ -43,6 +43,9 @@
 #define PERIODS_UDP_TIMEOUT (16)
 #define EPS (0.00001F)
 #define LOG_SIZE (1024)
+#define SCAN_SPEED_THRESHOLD (2.2F * 3.0F)
+#define SCAN_SPEED_LPF_COEF (1.0F / 8.0F)
+#define SCAN_SPEED_TIMEOUT (8)
 
 static float DIRECTION_CORRECTION[MOTOR_NUM] = {-1.0F, 1.0F};
 static int I2C_ADDRESS[MOTOR_NUM] = {0x64, 0x66};
@@ -106,6 +109,9 @@ typedef struct periodic_context {
     int linesens_continuous_cnt;
     int last_linesens_continuous_cnt;
     uint32_t tof;
+    int count;
+    int skip_count;
+    bool nextrev;
     float scan_angle_prev;
     int scan_revolution;
     float scan_angle_offset;
@@ -379,19 +385,16 @@ static bool periodic_routine(evdsptc_event_t* event){
     long long int interval = TICK_NS;
     int i, input;
     float v; 
-    static int count;
     double euler[3];
     int error;
     uint32_t tof;
-    static int skip_count;
     float delta_yaw;
-    static bool nextrev;
 
     clock_gettime(CLOCK_REALTIME, &now);
     if(prdctx->initial) {
         prdctx->initial = false;
-        count = 0;
-        skip_count = 0;
+        prdctx->count = 0;
+        prdctx->skip_count = 0;
     }
     else interval = timespec_diff(&prdctx->prev, &now);
     prdctx->prev = now;
@@ -411,21 +414,20 @@ static bool periodic_routine(evdsptc_event_t* event){
     delta_yaw = euler[2] - prdctx->position[2];
     if(delta_yaw < -180.0F) delta_yaw += 360.0F;
     if(delta_yaw >  180.0F) delta_yaw -= 360.0F;
-
     if(error <= 0) prdctx->scan_stage = 5;
-    else if(fabs(delta_yaw) > 10.0F){
-        if(skip_count >= 8){
+    else if(fabs(delta_yaw) > (SCAN_SPEED_TIMEOUT + SCAN_SPEED_TIMEOUT / 3.0F * prdctx->skip_count)){
+        if(prdctx->skip_count >= SCAN_SPEED_TIMEOUT){
             prdctx->scan_stage = 5; 
-            skip_count = 0;
+            prdctx->skip_count = 0;
             prdctx->position[2] = euler[2];
         }else{
-            skip_count++;
+            prdctx->skip_count++;
             prdctx->position[2] += prdctx->delta_yaw_lpf; 
-            //push_event_log("skip!! %f, %f, %d, %d", euler[2], prdctx->position[2], skip_count, error);
+            //push_event_log("skip!! %f, %f, %d, %d", euler[2], prdctx->position[2], prdctx->skip_count, error);
         }
     }else{
-        skip_count = 0;
-        prdctx->delta_yaw_lpf = prdctx->delta_yaw_lpf * 0.8F + delta_yaw * 0.2F;
+        prdctx->skip_count = 0;
+        prdctx->delta_yaw_lpf = prdctx->delta_yaw_lpf * 0.875F + delta_yaw * 0.125F;
         prdctx->position[2] = euler[2];
     }
 
@@ -460,7 +462,7 @@ static bool periodic_routine(evdsptc_event_t* event){
     }
     if(prdctx->state == STATE_REMOTE_SCAN){
         if(prdctx->scan_stage == 1){
-            skip_count = 0;
+            prdctx->skip_count = 0;
             prdctx->scanbuf.odom[0] = prdctx->position[0];
             prdctx->scanbuf.odom[1] = prdctx->position[1];
             prdctx->scanbuf.odom[2] = prdctx->position[2];
@@ -468,7 +470,7 @@ static bool periodic_routine(evdsptc_event_t* event){
             prdctx->scan_angle_offset = prdctx->position[2];
             //if(prdctx->scan_angle_offset < -EPS) prdctx->scan_angle_offset += 360.0F;
             prdctx->scan_stage = 2;
-            nextrev = false;
+            prdctx->nextrev = false;
         }
 
         cmd_turn_impl(0.5F); 
@@ -488,11 +490,11 @@ static bool periodic_routine(evdsptc_event_t* event){
         //if(angle_normalized < 0) angle_normalized += 360;
 
         if(prdctx->scan_stage > 2){
-            if(nextrev && angle_normalized_prev > 240 && angle_normalized < 120){
-                nextrev = false; 
+            if(prdctx->nextrev && angle_normalized_prev > 240 && angle_normalized <= 120){
+                prdctx->nextrev = false; 
                 prdctx->scan_revolution++; 
-            }else if(angle_normalized_prev > 0 && angle_normalized <= 120){
-                nextrev = true;
+            }else if(angle_normalized_prev > 120 && angle_normalized <= 240){
+                prdctx->nextrev = true;
             }
         }
         angle += prdctx->scan_revolution * 360.0F;
@@ -504,7 +506,7 @@ static bool periodic_routine(evdsptc_event_t* event){
                 prdctx->scan_angle_offset, 
                 delta_yaw,
                 prdctx->delta_yaw_lpf,
-                skip_count 
+                prdctx->skip_count 
                 );
         prdctx->scan_angle_prev = angle;
 
@@ -592,7 +594,7 @@ static bool periodic_routine(evdsptc_event_t* event){
 
     if(prdctx->scanbuf.scan){
         evrbcar_udp_send_scan_data(&scan_udpctx, &prdctx->scanbuf, prdctx->scanbuf.num);
-    }else if(prdctx->state != STATE_REMOTE_SCAN && count++ % 64 == 0){
+    }else if(prdctx->state != STATE_REMOTE_SCAN && prdctx->count++ % 64 == 0){
         prdctx->scanbuf.odom[0] = prdctx->position[0];
         prdctx->scanbuf.odom[1] = prdctx->position[1];
         prdctx->scanbuf.odom[2] = prdctx->position[2];

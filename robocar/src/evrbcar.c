@@ -532,7 +532,7 @@ static bool periodic_routine(evdsptc_event_t* event){
             prdctx->scan_periods = 0;
             prdctx->scanbuf.scan = true;
         }else if(prdctx->scan_stage == 5){
-            if(angle >= 715.0F){
+            if(angle >= 700.0F){
                 prdctx->scan_stage = 6;
                 prdctx->state = STATE_REMOTE_STOP;
             }

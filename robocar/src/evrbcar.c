@@ -111,10 +111,8 @@ typedef struct periodic_context {
     uint32_t tof;
     int count;
     int skip_count;
-    bool nextrev;
+    float scan_angle;
     float scan_angle_prev;
-    int scan_revolution;
-    float scan_angle_offset;
     int scan_stage;
     int scan_periods;
     t_scan_data scanbuf;
@@ -323,7 +321,6 @@ static void cmd_scan(void){
         prdctx.scan_stage = 1;
         prdctx.scan_periods = 0;
         prdctx.scanbuf.num = 0;
-        prdctx.scan_revolution = 0;
         prdctx.scan_angle_prev= 0.0F;
         prdctx.delta_yaw_lpf = 0.0F;
         push_event_log("scan: started, state = %d, stage = %d", prdctx.state, prdctx.scan_stage);
@@ -414,10 +411,10 @@ static bool periodic_routine(evdsptc_event_t* event){
     delta_yaw = euler[2] - prdctx->position[2];
     if(delta_yaw < -180.0F) delta_yaw += 360.0F;
     if(delta_yaw >  180.0F) delta_yaw -= 360.0F;
-    if(error <= 0) prdctx->scan_stage = 5;
+    if(error <= 0) prdctx->scan_stage = -1;
     else if(fabs(delta_yaw) > (SCAN_SPEED_TIMEOUT + SCAN_SPEED_TIMEOUT / 3.0F * prdctx->skip_count)){
         if(prdctx->skip_count >= SCAN_SPEED_TIMEOUT){
-            prdctx->scan_stage = 5; 
+            prdctx->scan_stage = -1; 
             prdctx->skip_count = 0;
             prdctx->position[2] = euler[2];
         }else{
@@ -427,7 +424,7 @@ static bool periodic_routine(evdsptc_event_t* event){
         }
     }else{
         prdctx->skip_count = 0;
-        prdctx->delta_yaw_lpf = prdctx->delta_yaw_lpf * 0.875F + delta_yaw * 0.125F;
+        prdctx->delta_yaw_lpf = prdctx->delta_yaw_lpf * (1.0F - SCAN_SPEED_LPF_COEF) + delta_yaw * SCAN_SPEED_LPF_COEF;
         prdctx->position[2] = euler[2];
     }
 
@@ -467,54 +464,27 @@ static bool periodic_routine(evdsptc_event_t* event){
             prdctx->scanbuf.odom[1] = prdctx->position[1];
             prdctx->scanbuf.odom[2] = prdctx->position[2];
 
-            prdctx->scan_angle_offset = prdctx->position[2];
-            //if(prdctx->scan_angle_offset < -EPS) prdctx->scan_angle_offset += 360.0F;
+            prdctx->scan_angle = 0.0F;
             prdctx->scan_stage = 2;
-            prdctx->nextrev = false;
         }
+        else prdctx->scan_angle += delta_yaw;
 
         cmd_turn_impl(0.5F); 
         
-        float angle = prdctx->position[2] - prdctx->scan_angle_offset;
-        if(
-                (prdctx->scan_stage > 2 && prdctx->position[2] < prdctx->scan_angle_offset)||
-                (prdctx->scan_stage ==2 && angle < -180.0F)
-          ) {
-            if(angle >= 0.0F) angle = 360.0F - angle;
-            else angle += 360.0F;
-        }
-        //if(prdctx->scan_stage > 2 && angle < -EPS) angle += 360.0F;
-
-        int angle_normalized_prev = ((int)prdctx->scan_angle_prev) % 360;
-        int angle_normalized = ((int)angle) % 360;
-        //if(angle_normalized < 0) angle_normalized += 360;
-
-        if(prdctx->scan_stage > 2){
-            if(prdctx->nextrev && angle_normalized_prev > 240 && angle_normalized <= 120){
-                prdctx->nextrev = false; 
-                prdctx->scan_revolution++; 
-            }else if(angle_normalized_prev > 120 && angle_normalized <= 240){
-                prdctx->nextrev = true;
-            }
-        }
-        angle += prdctx->scan_revolution * 360.0F;
-        push_event_log("stage = %d, rev = %d, angle = %f, %d, %d, %f, %f, dy = %f, %f, %d" , prdctx->scan_stage , prdctx->scan_revolution, 
-                angle, 
-                angle_normalized, 
-                angle_normalized_prev, 
+        push_event_log("stage = %d, angle = %f, %f, dy = %f, %f, %d" , prdctx->scan_stage, 
+                prdctx->scan_angle, 
                 prdctx->position[2], 
-                prdctx->scan_angle_offset, 
                 delta_yaw,
                 prdctx->delta_yaw_lpf,
                 prdctx->skip_count 
                 );
-        prdctx->scan_angle_prev = angle;
+        prdctx->scan_angle_prev = prdctx->scan_angle;
 
         if(prdctx->scan_periods++ >= SCAN_BUFSIZE) prdctx->scan_stage = -1;
         
         if(prdctx->scan_stage == 2){
-            if(angle >= 165.0F){
-                prdctx->scanbuf.start_angle = angle;
+            if(prdctx->scan_angle >= 165.0F){
+                prdctx->scanbuf.start_angle = prdctx->scan_angle;
                 prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
                 //push_event_log("scan: num = %d, stage = %d, angle = %f, range = %d", prdctx->scanbuf.num - 1, prdctx->scan_stage, angle, prdctx->scanbuf.range[prdctx->scanbuf.num - 1]);
                 prdctx->scan_stage = 3;
@@ -523,16 +493,16 @@ static bool periodic_routine(evdsptc_event_t* event){
         }else if(prdctx->scan_stage == 3){
             prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
             //push_event_log("scan: num = %d, stage = %d, angle = %f, range = %d", prdctx->scanbuf.num - 1, prdctx->scan_stage, angle, prdctx->scanbuf.range[prdctx->scanbuf.num - 1]);
-            if(angle >= 555.0F) prdctx->scan_stage = 4;
+            if(prdctx->scan_angle >= 555.0F) prdctx->scan_stage = 4;
         }else if(prdctx->scan_stage == 4){
-            prdctx->scanbuf.end_angle = angle;
+            prdctx->scanbuf.end_angle = prdctx->scan_angle;
             prdctx->scanbuf.range[prdctx->scanbuf.num++] = prdctx->tof;
             //push_event_log("scan: num = %d, stage = %d, angle = %f, range = %d", prdctx->scanbuf.num - 1, prdctx->scan_stage, angle, prdctx->scanbuf.range[prdctx->scanbuf.num - 1]);
             prdctx->scan_stage = 5;
             prdctx->scan_periods = 0;
             prdctx->scanbuf.scan = true;
         }else if(prdctx->scan_stage == 5){
-            if(angle >= 700.0F){
+            if(prdctx->scan_angle >= 700.0F){
                 prdctx->scan_stage = 6;
                 prdctx->state = STATE_REMOTE_STOP;
             }

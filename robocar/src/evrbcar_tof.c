@@ -43,6 +43,36 @@ int evrbcar_tof_init(VL53L0X_Dev_t* tofctx, char* dev, uint8_t addr){
         push_event_log("Call of VL53L0X_SetDeviceMode");
         Status = VL53L0X_SetDeviceMode(tofctx, VL53L0X_DEVICEMODE_CONTINUOUS_RANGING); // Setup in single ranging mode
     }
+    if (Status == VL53L0X_ERROR_NONE) {
+        Status = VL53L0X_SetLimitCheckEnable(tofctx,
+        		VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE, 1);
+    }
+    if (Status == VL53L0X_ERROR_NONE) {
+        Status = VL53L0X_SetLimitCheckEnable(tofctx,
+        		VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE, 1);
+    }
+    if (Status == VL53L0X_ERROR_NONE) {
+        Status = VL53L0X_SetLimitCheckValue(tofctx,
+        		VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE,
+        		(FixPoint1616_t)(0.1*65536));
+	}			
+    if (Status == VL53L0X_ERROR_NONE) {
+        Status = VL53L0X_SetLimitCheckValue(tofctx,
+        		VL53L0X_CHECKENABLE_SIGMA_FINAL_RANGE,
+        		(FixPoint1616_t)(60*65536));			
+    }
+    if (Status == VL53L0X_ERROR_NONE) {
+        Status = VL53L0X_SetMeasurementTimingBudgetMicroSeconds(tofctx,
+        		33000);
+	}
+    if (Status == VL53L0X_ERROR_NONE) {
+        Status = VL53L0X_SetVcselPulsePeriod(tofctx, 
+		        VL53L0X_VCSEL_PERIOD_PRE_RANGE, 18);
+    }
+    if (Status == VL53L0X_ERROR_NONE) {
+        Status = VL53L0X_SetVcselPulsePeriod(tofctx, 
+		        VL53L0X_VCSEL_PERIOD_FINAL_RANGE, 14);
+    }
     if(Status == VL53L0X_ERROR_NONE)
     {
         push_event_log("Call of VL53L0X_StartMeasurement");
